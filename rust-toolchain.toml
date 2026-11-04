@@ -1,0 +1,3 @@
+[toolchain]
+# azalea needs nightly. Pinned so a nightly that breaks it does not break the build overnight.
+channel = "nightly-2026-10-14"

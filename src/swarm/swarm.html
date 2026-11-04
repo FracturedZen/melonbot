@@ -1,0 +1,612 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BOTSWARM</title>
+<style>
+:root {
+  --bg: #15121f; --panel: #1e1a2c; --row: #252036; --line: #3a3352; --text: #e6e1f5; --dim: #9a92b8;
+  --accent: #a78bfa; --accent-dim: #4c3d7a; --green: #4ade80; --red: #f87171; --amber: #fbbf24; --blue: #60a5fa;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 10px 16px; background: linear-gradient(90deg, #3b2a6b, #1e1a2c); border-bottom: 2px solid var(--accent); }
+header h1 { margin: 0; font-size: 20px; letter-spacing: 3px; color: #fff; }
+header .sub { color: #d8ccff; font-size: 12px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; background: #0006; font-size: 12px; white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); display: inline-block; }
+.dot.on { background: var(--green); } .dot.warn { background: var(--amber); } .dot.off { background: var(--red); }
+main { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 12px; padding: 12px 16px; }
+@media (max-width: 1000px) { main { grid-template-columns: minmax(0, 1fr); } }
+.col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+.card h2 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--accent); display: flex; align-items: center; gap: 8px; }
+.card h2 .grow { flex: 1; }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; color: var(--dim); font-weight: 500; font-size: 12px; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+td { padding: 5px 6px; border-bottom: 1px solid #2c2640; vertical-align: top; }
+tr.bot { cursor: pointer; } tr.bot:hover td { background: var(--row); } tr.bot.sel td { background: #2e2550; }
+.mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.dim { color: var(--dim); } .err { color: var(--red); } .ok { color: var(--green); } .warn { color: var(--amber); }
+button { background: var(--accent-dim); color: #fff; border: 1px solid #6b57b0; border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; }
+button:hover { background: #5d4a96; } button.primary { background: var(--accent); color: #1b1430; border-color: var(--accent); font-weight: 600; }
+button.danger { background: #5a2330; border-color: #8a3445; } button:disabled { opacity: .45; cursor: default; }
+input, select, textarea { background: #120f1c; color: var(--text); border: 1px solid var(--line); border-radius: 5px; padding: 4px 6px; font: inherit; min-width: 0; }
+input[type=number] { width: 80px; } input.coord { width: 76px; } textarea { width: 100%; min-height: 70px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+.row label { color: var(--dim); }
+.btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.login { border: 2px solid var(--accent); background: #261d45; }
+.code { font: 700 30px ui-monospace, Consolas, monospace; letter-spacing: 6px; color: #fff; }
+.feed { max-height: 220px; overflow: auto; font-size: 12px; }
+.feed div { padding: 2px 0; border-bottom: 1px solid #2a2440; }
+.hint { color: var(--dim); font-size: 12px; margin: 4px 0; }
+.kv { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(0, 1.4fr) auto; gap: 4px 8px; align-items: center; margin: 4px 0 10px; }
+.kv .over { color: var(--amber); font-size: 11px; }
+.tag { font-size: 11px; padding: 0 6px; border-radius: 4px; background: #0005; color: var(--dim); }
+.tag.controller { color: var(--blue); } .tag.panel { color: var(--accent); } .tag.bot { color: var(--amber); }
+</style>
+</head>
+<body>
+<header>
+  <h1>BOTSWARM</h1>
+  <span class="sub">swarm bots &middot; <b>not</b> the bots with a window of their own (they have their own panels)</span>
+  <span class="pill" id="h-server"></span>
+  <span class="pill" id="h-count"></span>
+  <span class="pill" id="h-ctrl"><span class="dot"></span>controller</span>
+  <span class="pill" id="h-order"></span>
+</header>
+<main>
+<div class="col">
+  <div class="card login" id="login" hidden>
+    <h2>Add account</h2>
+    <div id="login-body"></div>
+  </div>
+
+  <div class="card">
+    <h2>Bots <span class="grow"></span>
+      <button class="primary" onclick="send({type:'add-account'})">+ Add account</button>
+      <button onclick="send({type:'start', name:'*'})">Start all</button>
+      <button onclick="send({type:'stop', name:'*'})">Stop all</button>
+    </h2>
+    <table>
+      <thead><tr><th></th><th>Bot</th><th>Where</th><th>HP / food</th><th>Doing</th><th>Controller</th><th></th></tr></thead>
+      <tbody id="bots"></tbody>
+    </table>
+    <div class="hint" id="bots-hint"></div>
+  </div>
+
+  <div class="card" id="selcard" hidden>
+    <h2>Bot: <span id="sel-name"></span><span class="grow"></span><span id="sel-status" class="dim"></span></h2>
+    <div class="row mono dim" id="sel-detail"></div>
+    <div class="row">
+      <button id="sel-startstop"></button>
+      <label><input type="checkbox" id="sel-listen"> listens to the controller</label>
+      <label><input type="checkbox" id="sel-autostart"> starts with the swarm</label>
+      <span class="grow"></span>
+      <button class="danger" id="sel-remove">Remove</button>
+    </div>
+    <div class="row"><label>Own order:</label> <span id="sel-own" class="dim"></span></div>
+    <div class="row">
+      <button onclick="botOrder(null)">Follow the swarm</button>
+      <button onclick="botOrder({kind:'idle'})">Hold here</button>
+      <button onclick="botOrder(gotoOrder('sel'))">Go to</button>
+      <input class="coord" id="sel-x" placeholder="x"><input class="coord" id="sel-y" placeholder="y"><input class="coord" id="sel-z" placeholder="z">
+    </div>
+    <div class="row">
+      <button onclick="botOrder({kind:'stay-near', follow:{kind:'player', name: val('sel-player')}, hold: 3})">Follow player</button>
+      <input id="sel-player" placeholder="player name">
+    </div>
+    <div class="row">
+      <button onclick="sendCommand(selected)">Send /command</button>
+      <input id="sel-cmd" placeholder="/command (never plain chat)" style="flex:1">
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Swarm orders</h2>
+    <div class="hint">Every bot follows the newest order: these, or your controller's. A bot with its own order (above) ignores both.</div>
+    <div class="row btns">
+      <button class="danger" onclick="order({kind:'idle'})">Stop &middot; hold here</button>
+      <button id="btn-come" onclick="comeToController()">Come to the controller</button>
+      <button onclick="order({kind:'stay-near', follow:{kind:'controller'}, hold: 3})">Follow the controller</button>
+    </div>
+    <div class="row">
+      <button onclick="order(gotoOrder('o'))">Go to</button>
+      <input class="coord" id="o-x" placeholder="x"><input class="coord" id="o-y" placeholder="y"><input class="coord" id="o-z" placeholder="z">
+    </div>
+    <div class="row">
+      <button onclick="order({kind:'stay-near', follow:{kind:'player', name: val('o-player')}, hold: 3})">Follow player</button>
+      <input id="o-player" placeholder="player name" list="seen-names">
+      <datalist id="seen-names"></datalist>
+    </div>
+    <div class="row">
+      <button onclick="sendCommand('*')">/command to all</button>
+      <input id="all-cmd" placeholder="/command (never plain chat)" style="flex:1">
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Feed</h2>
+    <div class="feed mono" id="feed"></div>
+  </div>
+</div>
+
+<div class="col">
+  <div class="card">
+    <h2>Formation</h2>
+    <div class="row">
+      <label>Shape</label> <select id="f-shape"></select>
+      <label>Plane</label> <select id="f-plane"><option value="flat">flat</option><option value="upright">upright</option></select>
+    </div>
+    <div class="row">
+      <label>Radius</label> <input type="number" id="f-radius" step="0.5" min="0.5">
+      <label>Speed b/s</label> <input type="number" id="f-speed" step="0.5" min="0">
+      <label>Height</label> <input type="number" id="f-height" step="0.5">
+      <label>Shuffle s</label> <input type="number" id="f-shuffle" step="1" min="1">
+    </div>
+    <div class="row">
+      <label>Round</label>
+      <select id="f-centre">
+        <option value="controller">the controller player</option>
+        <option value="player">a player</option>
+        <option value="here">where the bots are now</option>
+        <option value="point">a point</option>
+      </select>
+      <input id="f-cplayer" placeholder="player name" list="seen-names">
+      <input class="coord" id="f-cx" placeholder="x"><input class="coord" id="f-cy" placeholder="y"><input class="coord" id="f-cz" placeholder="z">
+    </div>
+    <div class="row btns">
+      <button class="primary" onclick="applyFormation(true)">Form up</button>
+      <button onclick="applyFormation(false)">Change shape only</button>
+    </div>
+    <div class="hint">Speed is how fast each bot travels along the shape (0 = still). Random changes shape, and scatter re-draws, every "shuffle" seconds.</div>
+  </div>
+
+  <div class="card">
+    <h2>Nuker <span class="grow"></span><span id="n-status" class="dim"></span></h2>
+    <div class="row">
+      <label><input type="checkbox" id="n-on" onchange="send({type:'nuker', on: this.checked})"> on for the swarm</label>
+      <select id="n-mode"><option>ClearBox</option><option>Sphere</option></select>
+      <select id="n-list"><option>Blacklist</option><option>Whitelist</option></select>
+    </div>
+    <div class="row"><label>Corner 1</label>
+      <input class="coord" id="n-x1" placeholder="x"><input class="coord" id="n-y1" placeholder="y"><input class="coord" id="n-z1" placeholder="z">
+      <button onclick="nukerCorner(1)">= controller player</button></div>
+    <div class="row"><label>Corner 2</label>
+      <input class="coord" id="n-x2" placeholder="x"><input class="coord" id="n-y2" placeholder="y"><input class="coord" id="n-z2" placeholder="z">
+      <button onclick="nukerCorner(2)">= controller player</button></div>
+    <div class="row"><label>Blocks</label><input id="n-blocks" style="flex:1" placeholder="stone, dirt, ... (the list the mode above applies to)"></div>
+    <div class="row"><label><input type="checkbox" id="n-collect"> collect blocks (empty full bags into the chest signed for storage)</label></div>
+    <div class="row btns">
+      <button class="primary" onclick="saveNuker()">Save</button>
+      <button onclick="send({type:'nuker-from-controller'}); refill.nuker = true">Copy from the controller instance</button>
+    </div>
+    <div class="hint">ClearBox: the box is cut into 8x8 columns; each bot takes the nearest free one and clears it top down - no two bots on one. Sphere: everything in reach of each bot, wherever it is. Your controller's nuker (its own box strips) takes over while it has the nuker on.</div>
+  </div>
+
+  <div class="card">
+    <h2>Printer <span class="grow"></span><span id="p-status" class="dim"></span></h2>
+    <div class="row">
+      <label><input type="checkbox" id="p-on" onchange="send({type:'printer', on: this.checked})"> on for the swarm</label>
+      <label>placement</label><select id="p-place" onchange="send({type:'printer', placement: this.value || null})"></select>
+    </div>
+    <div class="mono" id="p-job" style="white-space:pre-wrap"></div>
+    <div class="row">
+      <label><input type="checkbox" id="p-strict"> exact states (strict)</label>
+      <label><input type="checkbox" id="p-fix"> click states right (repeaters, doors, notes...)</label>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="p-till"> finish farmland / paths with a tool</label>
+      <label><input type="checkbox" id="p-clear"> mine wrong blocks</label>
+      <label><input type="checkbox" id="p-stock"> fetch from the supply chests</label>
+    </div>
+    <div class="row"><label>places per</label><input type="number" id="p-ppw" style="width:50px"><label>ms window</label><input type="number" id="p-win" style="width:60px">
+      <button onclick="savePrinter()">Save</button><button onclick="send({type:'printer', reset: true})">Clear these (use the controller's)</button></div>
+    <div class="hint">Prints what your controller has placed in Litematica - live from its instance, else Litematica's saved file (written when it leaves the world). The schematic file comes from the folder below, else where Litematica found it. The build is cut into 8x8 columns; each bot prints the nearest free one bottom up. Materials come from the controller printer's supply chests (and its map-art colour chests). Settings default to the controller's printer; set here, they win.</div>
+    <div class="mono dim" id="p-drop"></div>
+    <table><tbody id="p-bots"></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>Combat <span class="grow"></span><span id="cb-status" class="dim"></span></h2>
+    <div class="row"><label><input type="checkbox" id="cb-defend" onchange="send({type:'defend', on: this.checked})"> Defend - hostile mobs, and any player who hits a swarm bot or one of your accounts</label></div>
+    <div class="row"><label><input type="checkbox" id="cb-fight" onchange="send({type:'fight-back', on: this.checked})"> Fight back - a bot that is hit fights back, Defend or not</label></div>
+    <div class="row">
+      <button onclick="attack()">Attack player</button>
+      <input id="cb-target" placeholder="player name" list="seen-names">
+      <button onclick="send({type:'attack', name: null})">Clear target</button>
+    </div>
+    <div class="hint">Friends, your own accounts and the swarm's bots are never attacked. Your controller's Defend / attack target apply too, to bots that listen to it.</div>
+    <table><tbody id="cb-attackers"></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>Food &amp; chests</h2>
+    <div class="row"><label>Food chest</label> <span class="mono" id="fd-chest"></span>
+      <button onclick="send({type:'food', chest:'controller'})">= where the controller player stands</button>
+      <button onclick="send({type:'food', chest:null})">clear</button></div>
+    <div class="row"><label>else a chest signed</label><input id="fd-sign" style="width:90px">
+      <label>fetch below</label><input type="number" id="fd-low" style="width:60px"><label>food points carried</label></div>
+    <div class="row"><label>Tools: chest signed</label><input id="tl-sign" style="width:80px"><label>within</label><input type="number" id="tl-r" style="width:60px">
+      <label>Storage: signed</label><input id="st-sign" style="width:80px"></div>
+    <div class="row"><button onclick="saveChests()">Save</button></div>
+    <div class="hint">No food chest: bots eat what they carry. Tools: what they carry, else a signed tools chest nearby. Storage is only used while collecting.</div>
+    <div class="mono dim" id="known-chests"></div>
+  </div>
+
+  <div class="card">
+    <h2>Ender chest link <span class="grow"></span><span id="ec-status" class="dim"></span></h2>
+    <div class="row"><label><input type="checkbox" id="ec-on" onchange="send({type:'eclink', on: this.checked})"> Tools, weapons, food and gear from the ender chest (silent swaps)</label></div>
+    <div class="row"><label>Ender chest</label> <span class="mono" id="ec-chest"></span>
+      <button onclick="send({type:'eclink', chest:'controller'})">= where the controller player stands</button>
+      <button onclick="send({type:'eclink', chest:null})">clear</button></div>
+    <div class="row"><label>tools and weapons back in the chest at</label><input type="number" id="ec-panic" style="width:60px" min="0" max="20"><label>health (borrowing again from 4 above it)</label></div>
+    <div class="row"><label>look for an ender chest up to</label><input type="number" id="ec-range" style="width:80px" min="16" max="30000"><label>blocks from where it works</label>
+      <button onclick="send({type:'eclink', panic: num('ec-panic'), range: num('ec-range')}); refill.eclink = true">Save</button>
+      <button onclick="send({type:'eclink', search: 'again'})">search again</button></div>
+    <div class="row dim" id="ec-search"></div>
+    <div class="hint">Every bot links whenever it is not printing: an ender chest it carries is placed first, else the nearest in any bot's loaded chunks or remembered within the range, else one bot flies a spiral out to the range looking. Then back to where it works. Tools and weapons are swapped into the held slot and back after 5 s unused; a totem goes in an empty offhand and armor on empty slots, kept on while it works. Food comes out when it runs low. A chest trip breaks the link and it links again; print jobs put everything back and never use it.</div>
+    <table><tbody id="ec-bots"></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>Controller <span class="grow"></span><span id="c-status" class="dim"></span></h2>
+    <div class="row">
+      <label><input type="checkbox" id="c-enabled"> link to the controller</label>
+      <input id="c-host" style="width:120px"> : <input type="number" id="c-port" style="width:80px">
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="c-ws"> follow its position stream</label>
+      <label>port +</label><input type="number" id="c-wsoff" style="width:60px">
+      <button onclick="saveController()">Save</button>
+    </div>
+    <div class="hint">Any Java client with the controller mod on as <b>Controller</b>: its Come Here / Stay Near / Go To drive these bots, and its clear box, targets and syncs are kept below.</div>
+    <div class="mono dim" id="c-pos" style="white-space:pre-wrap"></div>
+    <table><tbody id="c-syncs"></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>Settings <span class="grow"></span>
+      <label class="dim" style="text-transform:none;letter-spacing:0">for</label> <select id="s-scope"></select>
+    </h2>
+    <div class="row">
+      <label>Top speed b/s</label> <input type="number" id="s-speed" step="1" min="1" max="100">
+      <label>Fan-out spacing</label> <input type="number" id="s-fan" step="0.5" min="0">
+      <button onclick="send({type:'speed', maxSpeed: num('s-speed'), fanOut: num('s-fan')})">Save</button>
+    </div>
+    <div class="row">
+      <label>Most bots online</label> <input type="number" id="s-max" min="1" max="10" style="width:60px">
+      <button onclick="send({type:'max-bots', n: num('s-max')})">Save</button>
+    </div>
+    <div id="s-modules"></div>
+  </div>
+
+  <div class="card">
+    <h2>Friends</h2>
+    <div class="hint">Never attacked, along with all your own accounts. One name per line.</div>
+    <textarea id="friends"></textarea>
+    <div class="row"><button onclick="saveFriends()">Save</button></div>
+  </div>
+
+  <div class="card">
+    <h2>Players the swarm sees</h2>
+    <table><tbody id="seen"></tbody></table>
+  </div>
+</div>
+</main>
+
+<script>
+const KEY = '__MELON_KEY__';
+let S = null, feedN = 0, selected = null, filled = false, settingsKey = '';
+const refill = {nuker: true, chests: true, printer: true};
+
+const $ = id => document.getElementById(id);
+const val = id => $(id).value.trim();
+const num = id => { const v = parseFloat($(id).value); return isNaN(v) ? null : v; };
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const focusedIn = el => el && el.contains(document.activeElement);
+
+async function send(cmd) {
+  try {
+    await fetch('/api/cmd', {method: 'POST', headers: {'X-Melon-Key': KEY, 'Content-Type': 'application/json'}, body: JSON.stringify(cmd)});
+  } catch (e) { note('could not reach the swarm: ' + e); }
+  setTimeout(poll, 150);
+}
+function note(t) { const d = document.createElement('div'); d.textContent = t; d.className = 'err'; $('feed').prepend(d); }
+function order(o) { if (o !== undefined) send({type: 'order', order: o}); }
+// null = back to the swarm's orders; undefined = the form was incomplete (already said so).
+function botOrder(o) { if (selected && o !== undefined) send({type: 'bot-order', name: selected, order: o}); }
+function gotoOrder(p) {
+  const x = num(p + '-x'), y = num(p + '-y'), z = num(p + '-z');
+  if (x === null || y === null || z === null) { note('go to needs x, y and z'); return undefined; }
+  return {kind: 'goto', x, y, z};
+}
+function comeToController() {
+  const p = S && S.controller.pos;
+  if (!p || p.age > 5) { note('no live controller position - is the controller mod on as Controller, with its position stream?'); return; }
+  order({kind: 'come-here', x: p.x, y: p.y, z: p.z});
+}
+function sendCommand(who) {
+  const id = who === '*' ? 'all-cmd' : 'sel-cmd';
+  const text = val(id);
+  if (!text.startsWith('/')) { note('only /commands - the bots never send plain chat'); return; }
+  send({type: 'command', name: who, text}); $(id).value = '';
+}
+function formation() {
+  return {shape: $('f-shape').value, plane: $('f-plane').value, radius: num('f-radius') ?? 6, speed: num('f-speed') ?? 0,
+          height: num('f-height') ?? 0, shuffle_secs: num('f-shuffle') ?? 10};
+}
+function applyFormation(formUp) {
+  send({type: 'formation', formation: formation()});
+  if (!formUp) return;
+  const c = $('f-centre').value;
+  let centre;
+  if (c === 'player') { if (!val('f-cplayer')) { note('which player?'); return; } centre = {kind: 'player', name: val('f-cplayer')}; }
+  else if (c === 'point') { const x = num('f-cx'), y = num('f-cy'), z = num('f-cz'); if (x === null || y === null || z === null) { note('the point needs x, y and z'); return; } centre = {kind: 'point', x, y, z}; }
+  else centre = {kind: c};
+  order({kind: 'formation', centre});
+}
+function saveController() {
+  send({type: 'controller', enabled: $('c-enabled').checked, host: val('c-host'), port: num('c-port'), ws: $('c-ws').checked, wsOffset: num('c-wsoff')});
+}
+function nukerCorner(which) { send({type: 'nuker-corner', which}); refill.nuker = true; }
+function saveNuker() {
+  const c = {type: 'nuker', 'target-mode': $('n-mode').value, 'list-mode': $('n-list').value, collect: $('n-collect').checked,
+             blocks: $('n-blocks').value.split(',').map(s => s.trim()).filter(Boolean)};
+  for (const k of ['x1', 'y1', 'z1', 'x2', 'y2', 'z2']) { const v = num('n-' + k); if (v !== null) c[k] = v; }
+  send(c); refill.nuker = true;
+}
+function attack() { const n = val('cb-target'); if (!n) { note('who?'); return; } send({type: 'attack', name: n}); }
+function saveChests() {
+  send({type: 'food', sign: val('fd-sign'), low: num('fd-low')});
+  send({type: 'chests', toolsSign: val('tl-sign'), toolsRadius: num('tl-r'), storageSign: val('st-sign')});
+  refill.chests = true;
+}
+function renderNuker() {
+  const n = S.nuker, s = n.settings || {};
+  if (!focusedIn($('n-on').closest('.card'))) $('n-on').checked = n.on;
+  $('n-status').textContent = !n.on ? 'off' : n.cells ? `${n.cells.done}/${n.cells.all} cells cleared` : (s['target-mode'] === 'Sphere' ? 'sphere' : 'no box set');
+  if (refill.nuker && !focusedIn($('n-on').closest('.card'))) {
+    refill.nuker = false;
+    $('n-mode').value = s['target-mode'] || 'ClearBox'; $('n-list').value = s['list-mode'] || 'Blacklist';
+    for (const k of ['x1', 'y1', 'z1', 'x2', 'y2', 'z2']) $('n-' + k).value = s[k] ?? '';
+    $('n-blocks').value = (s.blocks || []).map(b => b.replace(/^minecraft:/, '')).join(', ');
+    $('n-collect').checked = !!s.collect;
+  }
+}
+function savePrinter() {
+  send({type: 'printer', 'strict-state-match': $('p-strict').checked, 'fix-block-states': $('p-fix').checked, 'auto-till': $('p-till').checked,
+        'clear-wrong-blocks': $('p-clear').checked, 'use-storage-chests': $('p-stock').checked, 'places-per-window': num('p-ppw'), 'place-window-ms': num('p-win')});
+  refill.printer = true;
+}
+function renderPrinter(bots) {
+  const p = S.printer; if (!p) return;
+  const s = p.effective || {};
+  const card = $('p-on').closest('.card');
+  if (!focusedIn(card)) $('p-on').checked = p.on;
+  const j = p.job;
+  $('p-status').textContent = !p.on ? 'off' : !j ? 'no placement' : `${p.cellsDone}/${j.cells} cells done`;
+  $('p-job').textContent = j
+    ? `${j.name} - ${j.blocks} blocks (${j.file})\n${j.min.join(' ')} .. ${j.max.join(' ')} · ${j.source}` +
+      (j.disabled.length ? `\nsub-regions off: ${j.disabled.join(', ')}` : '') +
+      (Object.keys(j.unknown).length ? `\nleft out (not known to this client): ${Object.keys(j.unknown).join(', ')}` : '')
+    : (p.controller ? 'no enabled placement in the controller\'s Litematica' : 'no instance has the controller mod on as Controller');
+  const offers = p.offers || [];
+  const sel = $('p-place');
+  const opts = '<option value="">nearest the controller</option>' + offers.map(o => `<option value="${esc(o.name)}">${esc(o.name)}${o.enabled ? '' : ' (off)'}${o.dim ? ' · ' + esc(o.dim.replace('minecraft:', '')) : ''}</option>`).join('');
+  if (sel.dataset.opts !== opts) { sel.innerHTML = opts; sel.dataset.opts = opts; }
+  if (document.activeElement !== sel) sel.value = p.chosen || '';
+  if ((refill.printer || !filled) && !focusedIn(card)) {
+    refill.printer = false;
+    $('p-strict').checked = !!s['strict-state-match']; $('p-fix').checked = s['fix-block-states'] !== false; $('p-till').checked = s['auto-till'] !== false;
+    $('p-clear').checked = !!s['clear-wrong-blocks']; $('p-stock').checked = s['use-storage-chests'] !== false;
+    $('p-ppw').value = s['places-per-window'] ?? 9; $('p-win').value = s['place-window-ms'] ?? 300;
+  }
+  $('p-drop').textContent = `drop folder: ${p.dropDir} · supply chests: ${p.chests.supply}, colour chests: ${p.chests.mapart}`;
+  $('p-bots').innerHTML = bots.filter(b => b.printer && b.printer.on).map(b => {
+    const q = b.printer;
+    return `<tr><td>${esc(b.name)}</td><td>${esc(q.status)}</td><td class="dim">${q.placed} placed · ${q.fixed} fixed · ${q.cleared} cleared</td><td class="warn">${q.missing && q.missing.length ? 'needs ' + esc(q.missing.join(', ')) : ''}</td></tr>`;
+  }).join('');
+}
+function renderCombat() {
+  const c = S.combat;
+  if (!focusedIn($('cb-defend').closest('.card'))) { $('cb-defend').checked = c.defend; $('cb-fight').checked = c.fightBack; }
+  $('cb-status').textContent = (c.defend ? 'defending' : '') + (c.target ? (c.defend ? ' · ' : '') + 'target ' + c.target : '') || 'off';
+  $('cb-attackers').innerHTML = (c.attackers || []).map(a => `<tr><td class="mono warn">${esc(a.uuid.slice(0, 8))}</td><td>hit ${esc(a.victim.length > 20 ? 'one of your accounts' : a.victim)}</td><td class="dim">${age(a.age)} ago</td></tr>`).join('');
+}
+function renderChests() {
+  const f = S.food, ch = S.chests;
+  $('fd-chest').textContent = f.chest ? `${f.chest.x} ${f.chest.y} ${f.chest.z}` : 'none set';
+  if (refill.chests && !focusedIn($('fd-sign').closest('.card'))) {
+    refill.chests = false;
+    $('fd-sign').value = f.sign; $('fd-low').value = f.low; $('tl-sign').value = ch.toolsSign; $('tl-r').value = ch.toolsRadius; $('st-sign').value = ch.storageSign;
+  }
+  const known = Object.entries(ch.known || {}).map(([w, list]) => `"${w}": ${list.map(p => p.x + ' ' + p.y + ' ' + p.z).join(', ')}`);
+  $('known-chests').textContent = known.length ? 'signed chests seen: ' + known.join(' | ') : 'no signed chests seen yet';
+}
+function renderEcLink(bots) {
+  const e = S.eclink; if (!e) return;
+  const card = $('ec-on').closest('.card');
+  if (!focusedIn(card)) $('ec-on').checked = e.on;
+  if ((refill.eclink || !filled) && !focusedIn(card)) { refill.eclink = false; $('ec-panic').value = e.panic; $('ec-range').value = e.range; }
+  $('ec-chest').textContent = e.chest ? `${e.chest.x} ${e.chest.y} ${e.chest.z}` : 'nearest seen';
+  $('ec-search').textContent = e.search || '';
+  const known = (S.chests.known || {})['ender chest'] || [];
+  const linked = bots.filter(b => b.online && b.eclink && b.eclink.status.startsWith('linked')).length;
+  $('ec-status').textContent = !e.on ? 'off' : `${linked} linked · ${known.length} known`;
+  $('ec-bots').innerHTML = bots.filter(b => b.online && b.eclink).map(b => {
+    const q = b.eclink;
+    return `<tr><td>${esc(b.name)}</td><td>${esc(q.status)}</td><td class="dim">${q.borrows} borrowed</td></tr>`;
+  }).join('');
+}
+function saveFriends() { send({type: 'friends', list: $('friends').value.split('\n').map(s => s.trim()).filter(Boolean)}); }
+
+async function poll() {
+  try {
+    const r = await fetch('/api/state?feed=' + feedN, {headers: {'X-Melon-Key': KEY}});
+    if (!r.ok) throw new Error(r.status);
+    S = await r.json();
+    render();
+  } catch (e) {
+    $('h-count').innerHTML = '<span class="dot off"></span>swarm not answering';
+  }
+}
+
+function age(s) { return s < 60 ? Math.round(s) + 's' : s < 3600 ? Math.round(s / 60) + 'm' : (s / 3600).toFixed(1) + 'h'; }
+
+function render() {
+  const bots = S.bots || [];
+  const online = bots.filter(b => b.online).length;
+  $('h-server').textContent = S.server + (S.offline ? ' (OFFLINE TEST)' : '');
+  $('h-count').innerHTML = `<span class="dot ${online ? 'on' : 'off'}"></span>${online}/${bots.length} online`;
+  const c = S.controller;
+  const cOk = c.enabled && c.links > 0, wsOk = c.wsConnected;
+  $('h-ctrl').innerHTML = `<span class="dot ${!c.enabled ? '' : cOk ? 'on' : 'warn'}"></span>controller ${!c.enabled ? 'off' : cOk ? 'linked (' + c.links + ')' : 'not found'}${wsOk ? ' &middot; following' : ''}`;
+  $('h-order').innerHTML = `swarm: ${esc(S.order.text)}`;
+
+  // Bots.
+  $('bots').innerHTML = bots.map(b => {
+    const dot = b.online ? 'on' : b.running || b.starting ? 'warn' : 'off';
+    const where = b.online ? `${b.x} ${b.y} ${b.z}` : (b.starting ? 'starting...' : b.running ? 'reconnecting...' : 'stopped');
+    const hp = b.online ? `${b.health} / ${b.food}` : '';
+    const doing = b.online ? `${esc(b.order)} <span class="tag ${esc(b.source)}">${esc(b.source)}</span><div class="dim">${esc(b.state)}</div>` : (b.error ? `<span class="err">${esc(b.error)}</span>` : '');
+    const link = !b.listen ? '<span class="dim">ignores it</span>' : b.link ? '<span class="ok">linked</span>' : '<span class="dim">-</span>';
+    const btn = b.running || b.starting
+      ? `<button onclick="event.stopPropagation();send({type:'stop',name:'${esc(b.name)}'})">Stop</button>`
+      : `<button class="primary" onclick="event.stopPropagation();send({type:'start',name:'${esc(b.name)}'})">Start</button>`;
+    return `<tr class="bot ${selected === b.name ? 'sel' : ''}" onclick="select('${esc(b.name)}')"><td><span class="dot ${dot}"></span></td><td><b>${esc(b.name)}</b>${b.own ? ' <span class="tag bot">own order</span>' : ''}</td><td class="mono">${where}</td><td>${hp}</td><td>${doing}</td><td>${link}</td><td>${btn}</td></tr>`;
+  }).join('');
+  $('bots-hint').textContent = bots.length ? '' : 'No swarm accounts yet. "+ Add account" shows a Microsoft code - sign in with the alt you want to add.';
+
+  renderLogin();
+  renderSelected(bots);
+  renderController(c);
+  renderSeen();
+  renderSettings(bots);
+  renderNuker();
+  renderPrinter(bots);
+  renderCombat();
+  renderChests();
+  renderEcLink(bots);
+  const ci = S.controllerInstance;
+  $('c-pos').title = ci ? `controller instance: ${ci.name} (${ci.targets ?? 0} kill-aura targets${ci.nukerBox ? ', has a nuker box' : ''})` : 'no instance has the controller mod on as Controller';
+
+  // Fill the forms once (and never while typing).
+  if (!filled) {
+    filled = true;
+    $('f-shape').innerHTML = S.shapes.map(s => `<option>${s}</option>`).join('');
+    const f = S.formation;
+    $('f-shape').value = f.shape; $('f-plane').value = f.plane; $('f-radius').value = f.radius; $('f-speed').value = f.speed;
+    $('f-height').value = f.height; $('f-shuffle').value = f.shuffle_secs;
+    $('c-enabled').checked = c.enabled; $('c-host').value = c.host; $('c-port').value = c.port; $('c-ws').checked = c.ws; $('c-wsoff').value = c.wsOffset;
+    $('s-speed').value = S.maxSpeed; $('s-fan').value = S.fanOut; $('s-max').value = S.maxBots;
+    $('friends').value = (S.friends || []).join('\n');
+  }
+
+  for (const f of S.feed || []) {
+    feedN = Math.max(feedN, f.n);
+    const d = document.createElement('div');
+    d.textContent = new Date(f.t).toLocaleTimeString() + '  ' + f.text;
+    if (f.kind === 'say') d.className = 'warn';
+    $('feed').prepend(d);
+  }
+  while ($('feed').childNodes.length > 200) $('feed').lastChild.remove();
+}
+
+function renderLogin() {
+  const l = S.login;
+  $('login').hidden = !l;
+  if (!l) return;
+  const left = l.expires_at ? Math.max(0, Math.round((l.expires_at - Date.now()) / 1000)) : 0;
+  $('login-body').innerHTML = (l.code && !l.done ? `
+      <div class="row"><span class="code">${esc(l.code)}</span></div>
+      <div class="row">1. Open <a href="${esc(l.url)}" target="_blank" rel="noopener" style="color:var(--accent)">${esc(l.url)}</a></div>
+      <div class="row">2. Sign in with the account you want to add (not one with a bot of its own, not the account you play on).</div>
+      <div class="row dim">The code works for ${age(left)} more.</div>` : '') +
+    `<div class="row ${l.done ? (l.ok ? 'ok' : 'err') : 'dim'}">${esc(l.status)}</div>
+     <div class="row"><button onclick="send({type:'cancel-login'})">${l.done ? 'Close' : 'Cancel'}</button></div>`;
+}
+
+function select(name) { selected = selected === name ? null : name; render(); }
+
+function renderSelected(bots) {
+  const b = bots.find(x => x.name === selected);
+  $('selcard').hidden = !b;
+  if (!b) return;
+  $('sel-name').textContent = b.name;
+  $('sel-status').textContent = b.online ? 'online ' + age(b.onlineFor) : b.running ? 'reconnecting' : 'stopped';
+  $('sel-detail').textContent = b.online ? `${b.dim}  ${b.x} ${b.y} ${b.z}  ping ${b.ping}  deaths ${b.deaths}  ${b.move}` : (b.error || b.linkError || '');
+  const ss = $('sel-startstop');
+  ss.textContent = b.running || b.starting ? 'Stop' : 'Start';
+  ss.onclick = () => send({type: b.running || b.starting ? 'stop' : 'start', name: b.name});
+  if (!focusedIn($('selcard'))) { $('sel-listen').checked = b.listen; $('sel-autostart').checked = b.autostart; }
+  $('sel-listen').onchange = e => send({type: 'listen', name: b.name, on: e.target.checked});
+  $('sel-autostart').onchange = e => send({type: 'autostart', name: b.name, on: e.target.checked});
+  $('sel-remove').onclick = () => { if (confirm('Remove ' + b.name + ' from the swarm? Its folder is kept in swarm/removed/.')) { send({type: 'remove', name: b.name}); selected = null; } };
+  $('sel-own').textContent = b.own || 'none - follows the swarm';
+}
+
+function renderController(c) {
+  $('c-status').innerHTML = !c.enabled ? 'off' : (c.links ? `<span class="ok">${c.links} bot(s) linked</span>` : `<span class="warn">no controller found at ${esc(c.host)}:${esc(c.port)}</span>`);
+  const ci = S.controllerInstance;
+  $('c-pos').textContent = (c.pos ? `controller player: ${c.pos.x} ${c.pos.y} ${c.pos.z}  yaw ${c.pos.yaw}  (${c.pos.age.toFixed(1)}s ago)` : (c.ws ? 'position stream: ' + (c.wsError || 'not connected') : 'position stream off'))
+    + '\n' + (ci ? `instance: ${ci.name} - kill-aura's ${ci.targets ?? 0} mob types copied` : 'no instance has the controller mod on as Controller (kill-aura uses the swarm\'s own list)');
+  $('btn-come').disabled = !(c.pos && c.pos.age < 5);
+  $('c-syncs').innerHTML = (c.syncs || []).map(s => `<tr><td class="mono" style="color:var(--blue)">${esc(s.kind)}</td><td class="mono dim" style="word-break:break-all">${esc(s.text)}</td><td class="dim">${age(s.age)}</td></tr>`).join('');
+}
+
+function renderSeen() {
+  const seen = S.seen || [];
+  $('seen').innerHTML = seen.length ? seen.map(p => `<tr><td><b>${esc(p.name)}</b></td><td class="mono">${p.x} ${p.y} ${p.z}</td><td class="dim">seen by ${esc(p.by)}</td></tr>`).join('') : '<tr><td class="dim">nobody in view</td></tr>';
+  $('seen-names').innerHTML = seen.map(p => `<option value="${esc(p.name)}">`).join('');
+}
+
+// Settings: the swarm's, or one bot's overrides on top.
+function renderSettings(bots) {
+  const scopeSel = $('s-scope');
+  const opts = ['swarm (every bot)', ...bots.map(b => b.name)];
+  const cur = scopeSel.value || '';
+  const want = ['', ...bots.map(b => b.name)];
+  if (scopeSel.options.length !== want.length || [...scopeSel.options].some((o, i) => o.value !== want[i])) {
+    scopeSel.innerHTML = want.map((v, i) => `<option value="${esc(v)}">${esc(opts[i])}</option>`).join('');
+    scopeSel.value = want.includes(cur) ? cur : '';
+  }
+  scopeSel.onchange = () => { settingsKey = ''; render(); };
+  const scope = scopeSel.value;
+  const bot = bots.find(b => b.name === scope);
+  const over = (bot && bot.overrides) || {};
+  const key = JSON.stringify([scope, S.modules, over]);
+  if (key === settingsKey || focusedIn($('s-modules'))) return;
+  settingsKey = key;
+  $('s-modules').innerHTML = S.modules.map(m => {
+    const o = over[m.name] || {};
+    const on = o.enabled !== undefined ? o.enabled : m.enabled;
+    const os = o.settings || {};
+    const rows = Object.keys(m.settings || {}).sort().map(k => {
+      const v = os[k] !== undefined ? os[k] : m.settings[k];
+      const isOver = os[k] !== undefined;
+      const id = `set-${m.name}-${k}`;
+      let input;
+      if (typeof v === 'boolean') input = `<input type="checkbox" id="${id}" ${v ? 'checked' : ''} onchange="setting('${m.name}','${k}', this.checked)">`;
+      else if (typeof v === 'number') input = `<input type="number" id="${id}" value="${v}" step="any" onchange="setting('${m.name}','${k}', parseFloat(this.value))">`;
+      else if (Array.isArray(v)) input = `<input id="${id}" value="${esc(v.join(', '))}" style="width:100%" onchange="setting('${m.name}','${k}', this.value.split(',').map(s=>s.trim()).filter(Boolean))">`;
+      else input = `<input id="${id}" value="${esc(v)}" style="width:100%" onchange="setting('${m.name}','${k}', this.value)">`;
+      return `<span class="mono">${esc(k)}</span>${input}<span>${isOver ? `<span class="over">own</span> <button onclick="setting('${m.name}','${k}', null)">reset</button>` : ''}</span>`;
+    }).join('');
+    const onOver = o.enabled !== undefined;
+    return `<div class="row"><b style="color:var(--accent)">${esc(m.name)}</b>
+        <label><input type="checkbox" ${on ? 'checked' : ''} onchange="moduleOn('${m.name}', this.checked)"> on</label>
+        ${onOver ? `<span class="over">own</span> <button onclick="moduleOn('${m.name}', null)">reset</button>` : ''}</div>
+      <div class="kv">${rows || '<span class="dim">no settings saved yet</span>'}</div>`;
+  }).join('') + (scope ? `<div class="hint">Changes here apply to ${esc(scope)} only ("own"); reset goes back to the swarm's value.</div>` : '<div class="hint">Changes here apply to every bot that has no own value.</div>');
+}
+function setting(module, key, value) { settingsKey = ''; send({type: 'setting', module, key, value, bot: $('s-scope').value}); }
+function moduleOn(module, on) { settingsKey = ''; send({type: 'module', module, on, bot: $('s-scope').value}); }
+
+poll();
+setInterval(poll, 1000);
+</script>
+</body>
+</html>

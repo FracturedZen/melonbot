@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PERIMETER</title>
+<style>
+:root {
+  --bg: #0f1716; --panel: #16211f; --row: #1d2b28; --line: #2c3f3b; --text: #e2efec; --dim: #8fa8a2;
+  --accent: #f5a524; --accent-dim: #6b4a12; --teal: #2dd4bf; --green: #4ade80; --red: #f87171; --amber: #fbbf24; --blue: #60a5fa;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 10px 16px; background: linear-gradient(90deg, #5a3b08, #16211f); border-bottom: 2px solid var(--accent); }
+header h1 { margin: 0; font-size: 20px; letter-spacing: 3px; color: #fff; }
+header .sub { color: #f6d8a6; font-size: 12px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; background: #0006; font-size: 12px; white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); display: inline-block; }
+.dot.on { background: var(--green); } .dot.warn { background: var(--amber); } .dot.off { background: var(--red); }
+main { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 12px; padding: 12px 16px; }
+@media (max-width: 1000px) { main { grid-template-columns: minmax(0, 1fr); } }
+.col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+.card h2 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--accent); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.card h2 .grow { flex: 1; }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; color: var(--dim); font-weight: 500; font-size: 12px; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+td { padding: 5px 6px; border-bottom: 1px solid #22322f; vertical-align: top; }
+tr.bot { cursor: pointer; } tr.bot:hover td { background: var(--row); } tr.bot.sel td { background: #263a35; }
+.mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.dim { color: var(--dim); } .err { color: var(--red); } .ok { color: var(--green); } .warn { color: var(--amber); }
+button { background: #24413b; color: #fff; border: 1px solid #3a6158; border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; }
+button:hover { background: #2f554d; } button.primary { background: var(--accent); color: #241703; border-color: var(--accent); font-weight: 600; }
+button.danger { background: #5a2330; border-color: #8a3445; } button:disabled { opacity: .45; cursor: default; }
+input, select, textarea { background: #0b1110; color: var(--text); border: 1px solid var(--line); border-radius: 5px; padding: 4px 6px; font: inherit; min-width: 0; }
+input[type=number] { width: 80px; } input.coord { width: 92px; } input.small { width: 64px; } textarea { width: 100%; min-height: 64px; }
+input[type=checkbox] { accent-color: var(--accent); }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+.row label { color: var(--dim); }
+.login { border: 2px solid var(--accent); background: #2a210f; }
+.code { font: 700 30px ui-monospace, Consolas, monospace; letter-spacing: 6px; color: #fff; }
+.feed { max-height: 240px; overflow: auto; font-size: 12px; }
+.feed div { padding: 2px 0; border-bottom: 1px solid #1f2d2a; }
+.hint { color: var(--dim); font-size: 12px; margin: 4px 0; }
+.grid2 { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 10px; align-items: center; }
+.grid2 label { color: var(--dim); }
+.stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin: 8px 0; }
+.stat { background: #0b1110; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+.stat .v { font: 600 16px ui-monospace, Consolas, monospace; color: #fff; }
+.stat .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+.bar { height: 8px; background: #0b1110; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.bar > div { height: 100%; background: linear-gradient(90deg, var(--teal), var(--accent)); width: 0; transition: width .4s; }
+#map { width: 100%; max-width: 520px; aspect-ratio: 1; image-rendering: pixelated; background: #0b1110; border: 1px solid var(--line); border-radius: 6px; display: block; }
+.legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--dim); margin-top: 6px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.tag { font-size: 11px; padding: 0 6px; border-radius: 4px; background: #0005; color: var(--dim); }
+</style>
+</head>
+<body>
+<header>
+  <h1>PERIMETER</h1>
+  <span class="sub">clears a box from build height to bedrock &middot; its own window, the botswarm's accounts</span>
+  <span class="pill" id="h-server"></span>
+  <span class="pill" id="h-count"></span>
+  <span class="pill" id="h-job"></span>
+  <span class="pill" id="h-progress"></span>
+</header>
+<main>
+<div class="col">
+  <div class="card login" id="login" hidden>
+    <h2>Add account</h2>
+    <div id="login-body"></div>
+  </div>
+
+  <div class="card">
+    <h2>Accounts <span class="grow"></span>
+      <button class="primary" onclick="send({type:'add-account'})">+ Add account</button>
+      <button onclick="send({type:'start', name:'*'})">Start ticked</button>
+      <button onclick="send({type:'stop', name:'*'})">Stop all</button>
+    </h2>
+    <table>
+      <thead><tr><th title="Opens when start-perimeter.cmd starts">Opens</th><th></th><th>Bot</th><th>Where</th><th>HP / food</th><th>Doing</th><th></th></tr></thead>
+      <tbody id="bots"></tbody>
+    </table>
+    <div class="hint" id="bots-hint"></div>
+  </div>
+
+  <div class="card" id="selcard" hidden>
+    <h2>Bot: <span id="sel-name"></span><span class="grow"></span><span id="sel-status" class="dim"></span></h2>
+    <div class="row mono dim" id="sel-detail"></div>
+    <div class="grid2 mono" id="sel-base"></div>
+    <div class="row">
+      <button id="sel-startstop"></button>
+      <button id="sel-record" title="Reads the signed chests within 24 blocks of where it stands">Record base here</button>
+      <button id="sel-forget">Forget base</button>
+    </div>
+    <div class="row">
+      <button onclick="sendCommand(selected)">Send /command</button>
+      <input id="sel-cmd" placeholder="/command (never plain chat)" style="flex:1">
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Feed</h2>
+    <div class="feed mono" id="feed"></div>
+  </div>
+</div>
+
+<div class="col">
+  <div class="card">
+    <h2>Job <span class="grow"></span><span id="job-state" class="dim"></span>
+      <button id="btn-run"></button>
+    </h2>
+    <div class="bar"><div id="bar"></div></div>
+    <div class="stats" id="stats"></div>
+    <div class="hint" id="job-hint"></div>
+  </div>
+
+  <div class="card">
+    <h2>Map <span class="grow"></span><span class="dim" id="map-note"></span></h2>
+    <canvas id="map" width="100" height="100"></canvas>
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <div class="card">
+    <h2>Box</h2>
+    <div class="grid2">
+      <label>Corner 1</label><div class="row" style="margin:0"><input class="coord" id="j-x1" placeholder="x"><input class="coord" id="j-z1" placeholder="z"></div>
+      <label>Corner 2</label><div class="row" style="margin:0"><input class="coord" id="j-x2" placeholder="x"><input class="coord" id="j-z2" placeholder="z"></div>
+      <label>Top y</label><div class="row" style="margin:0"><input class="coord" id="j-top" placeholder="build height"> <span class="dim">blank: build height</span></div>
+      <label>Bottom y</label><div class="row" style="margin:0"><input class="coord" id="j-bottom" placeholder="bedrock"> <span class="dim">blank: down to bedrock</span></div>
+      <label>Band</label><div class="row" style="margin:0"><input class="small" type="number" id="j-band" min="1" max="16"> <span class="dim">layers cut at a time</span></div>
+    </div>
+    <div class="row">
+      <button class="primary" onclick="saveBox()">Save box</button>
+      <button onclick="firstJob()">Example (800&times;800 from 0 / 0)</button>
+      <span class="grow"></span>
+      <button class="danger" onclick="if (confirm('Forget every cell\'s progress? The bots read the ground again from the top (air is skipped quickly).')) send({type:'reset-progress'})">Re-read ground</button>
+    </div>
+    <div class="hint">Corners are inclusive: x 0 to 799 is 800 blocks. A new box starts the progress over.</div>
+  </div>
+
+  <div class="card">
+    <h2>Settings</h2>
+    <div class="grid2">
+      <label>Fill blocks</label><textarea id="s-fill" title="What goes into water and lava, best first. Kept from what they dig."></textarea>
+      <label>Fill stacks kept</label><div><input type="number" class="small" id="s-keep" min="0" max="30"> <span class="dim">when room is made, the rest of what was dug is thrown out</span></div>
+      <label>Breaks / tick</label><input type="number" class="small" id="s-breaks" min="1" max="20">
+      <label>Seals / tick</label><input type="number" class="small" id="s-places" min="1" max="8">
+      <label>Stop progress</label><div><input type="number" class="small" id="s-stop" min="0.7" max="1" step="0.01"> <span class="dim">a slow block's STOP (the server takes 0.7)</span></div>
+      <label>Worn at</label><div><input type="number" class="small" id="s-retire" min="1" max="1000"> <span class="dim">uses left: into Repair</span></div>
+      <label>Max bands apart</label><div><input type="number" class="small" id="s-spread" min="0" max="100"> <span class="dim">below the highest ground left (0: neighbours only)</span></div>
+      <label>Containers</label><label><input type="checkbox" id="s-protect"> leave chests, barrels and shulkers in the box standing</label>
+      <label>Signs</label><div class="row" style="margin:0">tools <input class="small" id="s-tools"> repair <input class="small" id="s-repair"> food <input class="small" id="s-food"></div>
+      <label>Food low</label><div><input type="number" class="small" id="s-foodlow" min="0" max="200"> <span class="dim">hunger points carried before a food trip</span></div>
+      <label>Flying speed</label><div><input type="number" class="small" id="s-speed" min="1" max="100" step="0.5"> <span class="dim">blocks a second</span></div>
+      <label>Max bots</label><input type="number" class="small" id="s-max" min="1" max="10">
+    </div>
+    <div class="row"><button class="primary" onclick="saveSettings()">Save settings</button></div>
+  </div>
+</div>
+</main>
+
+<script>
+const KEY = '__MELON_KEY__';
+const CELL = 8;
+let S = null, feedN = 0, selected = null, filled = false;
+const refill = {box: true, settings: true};
+
+const $ = id => document.getElementById(id);
+const val = id => $(id).value.trim();
+const num = id => { const v = parseFloat($(id).value); return isNaN(v) ? null : v; };
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const focusedIn = el => el && el.contains(document.activeElement);
+const fmt = n => n == null ? '-' : Number(n).toLocaleString();
+const pos = p => p ? `${p.x} ${p.y} ${p.z}` : 'none';
+
+async function send(cmd) {
+  try {
+    await fetch('/api/cmd', {method: 'POST', headers: {'X-Melon-Key': KEY, 'Content-Type': 'application/json'}, body: JSON.stringify(cmd)});
+  } catch (e) { note('could not reach the perimeter bots: ' + e); }
+  setTimeout(poll, 150);
+}
+function note(t) { const d = document.createElement('div'); d.textContent = t; d.className = 'err'; $('feed').prepend(d); }
+function sendCommand(who) {
+  const text = val('sel-cmd');
+  if (!text.startsWith('/')) { note('only /commands - the bots never send plain chat'); return; }
+  send({type: 'command', name: who, text}); $('sel-cmd').value = '';
+}
+function saveBox() {
+  const c = {type: 'job', x1: num('j-x1'), z1: num('j-z1'), x2: num('j-x2'), z2: num('j-z2'), top: val('j-top'), bottom: val('j-bottom'), band: num('j-band')};
+  if ([c.x1, c.z1, c.x2, c.z2].some(v => v === null)) { note('the box needs both corners (x and z)'); return; }
+  const j = S.job;
+  const same = c.x1 === j.x1 && c.z1 === j.z1 && c.x2 === j.x2 && c.z2 === j.z2 && c.band === j.band
+    && (c.top === '' ? j.top == null : +c.top === j.top) && (c.bottom === '' ? j.bottom == null : +c.bottom === j.bottom);
+  if (same) { note('the box is unchanged'); return; }
+  if (S.progress && S.progress.known > 0 && !confirm('A new box starts the progress over. Save it?')) return;
+  send(c); refill.box = true;
+}
+function firstJob() {
+  const f = S.firstJob;
+  $('j-x1').value = f.x1; $('j-z1').value = f.z1; $('j-x2').value = f.x2; $('j-z2').value = f.z2;
+  $('j-top').value = ''; $('j-bottom').value = ''; $('j-band').value = f.band;
+  note('example box filled in - change it to your box, then press Save box');
+}
+function saveSettings() {
+  send({type: 'settings', fill: $('s-fill').value.split(/[\s,]+/).map(s => s.trim()).filter(Boolean), keepFill: num('s-keep'), breaks: num('s-breaks'),
+        places: num('s-places'), stopProgress: num('s-stop'), retire: num('s-retire'), spread: num('s-spread'), protectContainers: $('s-protect').checked,
+        toolsSign: val('s-tools'), repairSign: val('s-repair'), foodSign: val('s-food'), foodLow: num('s-foodlow'), maxSpeed: num('s-speed'), maxBots: num('s-max')});
+  refill.settings = true;
+}
+
+async function poll() {
+  try {
+    const r = await fetch('/api/state?feed=' + feedN, {headers: {'X-Melon-Key': KEY}});
+    if (!r.ok) throw new Error(r.status);
+    S = await r.json();
+    render();
+  } catch (e) {
+    $('h-count').innerHTML = '<span class="dot off"></span>perimeter bots not answering';
+  }
+}
+
+function age(s) { return s < 60 ? Math.round(s) + 's' : s < 3600 ? Math.round(s / 60) + 'm' : (s / 3600).toFixed(1) + 'h'; }
+
+function render() {
+  const bots = S.bots || [];
+  const online = bots.filter(b => b.online).length;
+  $('h-server').textContent = S.server + (S.offline ? ' (OFFLINE TEST)' : '');
+  $('h-count').innerHTML = `<span class="dot ${online ? 'on' : 'off'}"></span>${online}/${bots.length} online`;
+  $('h-job').innerHTML = `<span class="dot ${S.job.running ? 'on' : 'warn'}"></span>${S.job.running ? 'running' : 'paused'}`;
+  const p = S.progress;
+  $('h-progress').textContent = p ? `${(100 * p.done / Math.max(1, p.cells)).toFixed(2)}% cleared` : 'box not set up yet';
+
+  renderBots(bots);
+  renderLogin();
+  renderSelected(bots);
+  renderJob(bots);
+  renderMap(bots);
+  renderForms();
+
+  for (const f of S.feed || []) {
+    feedN = Math.max(feedN, f.n);
+    const d = document.createElement('div');
+    d.textContent = new Date(f.t).toLocaleTimeString() + '  ' + f.text;
+    if (f.kind === 'say') d.className = 'warn';
+    $('feed').prepend(d);
+  }
+  while ($('feed').childNodes.length > 200) $('feed').lastChild.remove();
+  filled = true;
+}
+
+function renderBots(bots) {
+  $('bots').innerHTML = bots.map(b => {
+    const dot = b.online ? 'on' : b.running || b.starting ? 'warn' : 'off';
+    const where = b.online ? `${b.x} ${b.y} ${b.z}` : (b.starting ? 'starting...' : b.running ? 'reconnecting...' : 'stopped');
+    const hp = b.online ? `${b.health} / ${b.food ?? '-'}` : '';
+    const doing = b.online ? `${esc(b.state)}<div class="dim">${fmt(b.broken)} broken &middot; ${fmt(b.placed)} sealed</div>`
+      : b.elsewhere ? `<span class="warn">running in the ${esc(b.elsewhere)}</span>` : (b.error ? `<span class="err">${esc(b.error)}</span>` : '');
+    const btn = b.running || b.starting
+      ? `<button onclick="event.stopPropagation();send({type:'stop',name:'${esc(b.name)}'})">Stop</button>`
+      : `<button class="primary" ${b.elsewhere ? 'disabled' : ''} onclick="event.stopPropagation();send({type:'start',name:'${esc(b.name)}'})">Start</button>`;
+    const tick = `<input type="checkbox" ${b.chosen ? 'checked' : ''} onclick="event.stopPropagation()" onchange="send({type:'choose',name:'${esc(b.name)}',on:this.checked})">`;
+    return `<tr class="bot ${selected === b.name ? 'sel' : ''}" onclick="select('${esc(b.name)}')"><td>${tick}</td><td><span class="dot ${dot}"></span></td><td><b>${esc(b.name)}</b>${b.base ? '' : ' <span class="tag" title="Log it in by the tools chest (or press Record base there)">no base</span>'}</td><td class="mono">${where}</td><td>${hp}</td><td>${doing}</td><td>${btn}</td></tr>`;
+  }).join('');
+  $('bots-hint').textContent = bots.length
+    ? 'Ticked accounts open when start-perimeter.cmd starts. An account running in the botswarm cannot start here (stop it there first).'
+    : 'No accounts yet. "+ Add account" shows a Microsoft code - sign in with the alt you want to add. Accounts are shared with the botswarm.';
+}
+
+function renderLogin() {
+  const l = S.login;
+  $('login').hidden = !l;
+  if (!l) return;
+  const left = l.expires_at ? Math.max(0, Math.round((l.expires_at - Date.now()) / 1000)) : 0;
+  $('login-body').innerHTML = (l.code && !l.done ? `
+      <div class="row"><span class="code">${esc(l.code)}</span></div>
+      <div class="row">1. Open <a href="${esc(l.url)}" target="_blank" rel="noopener" style="color:var(--accent)">${esc(l.url)}</a></div>
+      <div class="row">2. Sign in with the account you want to add (not one with a bot of its own, not the account you play on).</div>
+      <div class="row dim">The code works for ${age(left)} more.</div>` : '') +
+    `<div class="row ${l.done ? (l.ok ? 'ok' : 'err') : 'dim'}">${esc(l.status)}</div>
+     <div class="row"><button onclick="send({type:'cancel-login'})">${l.done ? 'Close' : 'Cancel'}</button></div>`;
+}
+
+function select(name) { selected = selected === name ? null : name; render(); }
+
+function renderSelected(bots) {
+  const b = bots.find(x => x.name === selected);
+  $('selcard').hidden = !b;
+  if (!b) return;
+  $('sel-name').textContent = b.name;
+  $('sel-status').textContent = b.online ? 'online ' + age(b.onlineFor) : b.running ? 'reconnecting' : 'stopped';
+  $('sel-detail').textContent = b.online ? `${b.dim}  ${b.x} ${b.y} ${b.z}  ping ${b.ping}  hunger ${b.hunger}/20  deaths ${b.deaths}  ${b.move}` : (b.error || '');
+  const base = b.base;
+  $('sel-base').innerHTML = base
+    ? `<label>tools</label><span>${pos(base.tools)}</span><label>repair</label><span>${pos(base.repair)}</span><label>food</label><span>${pos(base.food)}</span><label>recorded</label><span class="dim">${new Date(base.when).toLocaleString()} at ${pos(base.at)}</span>`
+    : `<label>base</label><span class="warn">none yet - log it in by the chest signed "${esc(S.job.tools_sign)}", or stand it there and press Record base here</span>`;
+  const ss = $('sel-startstop');
+  ss.textContent = b.running || b.starting ? 'Stop' : 'Start';
+  ss.className = b.running || b.starting ? '' : 'primary';
+  ss.disabled = !!b.elsewhere && !(b.running || b.starting);
+  ss.onclick = () => send({type: b.running || b.starting ? 'stop' : 'start', name: b.name});
+  $('sel-record').disabled = !b.online;
+  $('sel-record').onclick = () => send({type: 'record-base', name: b.name});
+  $('sel-forget').disabled = !base;
+  $('sel-forget').onclick = () => { if (confirm('Forget ' + b.name + '\'s base?')) send({type: 'forget-base', name: b.name}); };
+}
+
+function stat(k, v, title) { return `<div class="stat" ${title ? `title="${esc(title)}"` : ''}><div class="v">${v}</div><div class="k">${k}</div></div>`; }
+
+function renderJob(bots) {
+  const j = S.job, p = S.progress;
+  $('btn-run').textContent = j.running ? 'Pause' : 'Run';
+  $('btn-run').className = j.running ? 'danger' : 'primary';
+  $('btn-run').onclick = () => send({type: 'run', on: !j.running});
+  $('job-state').textContent = `x ${j.x1}..${j.x2} · z ${j.z1}..${j.z2}`;
+  if (!p) {
+    $('bar').style.width = '0';
+    $('stats').innerHTML = '';
+    $('job-hint').textContent = 'The box is set up once a bot is in the world (that gives the build height and bedrock).';
+    return;
+  }
+  const pct = 100 * p.done / Math.max(1, p.cells);
+  $('bar').style.width = pct.toFixed(2) + '%';
+  const working = bots.filter(b => b.online && b.cell).length;
+  $('stats').innerHTML =
+    stat('cleared', `${fmt(p.done)}<span class="dim" style="font-size:12px"> / ${fmt(p.cells)}</span>`, 'cells cleared to the bottom, of all') +
+    stat('scouted', `${(100 * p.known / Math.max(1, p.cells)).toFixed(0)}%`, 'cells whose ground has been read') +
+    stat('highest left', p.highest == null ? '-' : 'y ' + p.highest, 'the highest ground still to cut') +
+    stat('deepest', p.lowest == null ? '-' : 'y ' + p.lowest, 'the deepest any cell is still to cut from') +
+    stat('y range', `${p.min[1]}..${p.max[1]}`) +
+    stat('bots at work', working) +
+    stat('blocks broken', fmt(p.broken)) +
+    stat('fluid sealed', fmt(p.placed), 'blocks put into water and lava') +
+    stat('edge wall', fmt(p.walled), 'of those, outside the box (they stay)') +
+    stat('left standing', [...(p.leftSides || []).map(s => 'side ' + s), ...(p.leftBlocks ? [fmt(p.leftBlocks) + ' block(s)'] : [])].join(', ') || '-',
+      'what the server puts back every time (WorldGuard, the world border) - not dug');
+  $('job-hint').textContent = p.parked ? `${p.parked} cell(s) put off for want of fill - they are tried again in 2 minutes.` : '';
+}
+
+function shade(k, bands) {
+  if (k >= bands) return [12, 16, 20];
+  const t = Math.min(1, k / Math.max(1, bands));
+  // Untouched ground (amber-brown) to deep (teal-blue).
+  const a = [138, 104, 52], b = [22, 92, 110];
+  return a.map((v, i) => Math.round(v + (b[i] - v) * t));
+}
+
+function renderMap(bots) {
+  const p = S.progress, cv = $('map');
+  if (!p || !p.map) { $('map-note').textContent = p ? 'drawing...' : ''; return; }
+  const step = p.mapStep || 1, cols = Math.ceil(p.gridW / step), rows = Math.ceil(p.gridH / step);
+  if (cv.width !== cols || cv.height !== rows) { cv.width = cols; cv.height = rows; }
+  const ctx = cv.getContext('2d');
+  const img = ctx.createImageData(cols, rows);
+  for (let i = 0; i < cols * rows; i++) {
+    const ch = p.map[i];
+    const c = ch === undefined ? [11, 17, 16] : ch === '?' ? [44, 52, 50] : shade(ch.charCodeAt(0) - 48, p.mapBands);
+    img.data.set([c[0], c[1], c[2], 255], i * 4);
+  }
+  ctx.putImageData(img, 0, 0);
+  // The bots, where they are.
+  for (const b of bots.filter(b => b.online && b.x != null)) {
+    const cx = (b.x - p.min[0]) / CELL / step, cz = (b.z - p.min[2]) / CELL / step;
+    if (cx < -1 || cz < -1 || cx > cols + 1 || cz > rows + 1) continue;
+    ctx.fillStyle = '#fbbf24';
+    ctx.fillRect(Math.floor(cx) - 1, Math.floor(cz) - 1, 3, 3);
+  }
+  $('map-note').textContent = `north up · x ${p.min[0]} → ${p.max[0]} · ${step > 1 ? step + ' cells a pixel' : '1 cell (8×8) a pixel'}`;
+  $('legend').innerHTML = `<span><i style="background:rgb(44,52,50)"></i>not scouted</span><span><i style="background:rgb(138,104,52)"></i>untouched</span>` +
+    `<span><i style="background:rgb(80,98,81)"></i>part way</span><span><i style="background:rgb(22,92,110)"></i>deep</span><span><i style="background:rgb(12,16,20);border:1px solid #333"></i>cleared</span><span><i style="background:#fbbf24"></i>bot</span>`;
+}
+
+function renderForms() {
+  const j = S.job, s = S.settings;
+  const boxCard = $('j-x1').closest('.card'), setCard = $('s-fill').closest('.card');
+  if ((refill.box || !filled) && !focusedIn(boxCard)) {
+    refill.box = false;
+    $('j-x1').value = j.x1; $('j-z1').value = j.z1; $('j-x2').value = j.x2; $('j-z2').value = j.z2;
+    $('j-top').value = j.top ?? ''; $('j-bottom').value = j.bottom ?? ''; $('j-band').value = j.band;
+  }
+  if ((refill.settings || !filled) && !focusedIn(setCard)) {
+    refill.settings = false;
+    $('s-fill').value = (j.fill || []).join(', ');
+    $('s-keep').value = j.keep_fill_stacks; $('s-breaks').value = j.max_breaks_per_tick; $('s-places').value = j.places_per_tick;
+    $('s-stop').value = j.stop_progress; $('s-retire').value = j.retire_uses; $('s-spread').value = j.spread; $('s-protect').checked = j.protect_containers;
+    $('s-tools').value = j.tools_sign; $('s-repair').value = j.repair_sign; $('s-food').value = s.foodSign; $('s-foodlow').value = s.foodLow;
+    $('s-speed').value = s.maxSpeed; $('s-max').value = s.maxBots;
+  }
+}
+
+poll();
+setInterval(poll, 1000);
+</script>
+</body>
+</html>

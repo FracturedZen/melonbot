@@ -1,0 +1,8 @@
+/target
+# Per-bot folders hold the config (Discord webhook) and the Microsoft login cache: never commit them.
+/bots/
+*.log
+# The swarm folder holds every swarm account's Microsoft login cache: never commit it either.
+/swarm/
+# The perimeter bots' settings, progress and logs.
+/perimeter/

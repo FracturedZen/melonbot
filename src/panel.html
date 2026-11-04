@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MelonHack Control</title>
+<style>
+:root{--bg:#2b2d30;--panel:#1e1f22;--row:#26282b;--sel:#11364a;--line:#393b40;--text:#dfe1e5;--dim:#8c8f94;
+--accent:#3574f0;--green:#3fc77a;--red:#e05555;--amber:#e3a53b;--purple:#a77bf3}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,sans-serif}
+button{background:#3c3f44;color:var(--text);border:1px solid #4a4d52;border-radius:4px;padding:5px 12px;font:inherit;cursor:pointer}
+button:hover{background:#45484e}
+button.go{color:var(--green)}button.stop{color:var(--red)}button.ai{color:var(--purple)}
+input{background:var(--panel);color:var(--text);border:1px solid #4a4d52;border-radius:4px;padding:6px 8px;font:inherit}
+input:focus{outline:none;border-color:var(--accent)}
+#app{display:grid;grid-template-rows:auto 1fr auto auto;height:100vh}
+#bar{display:flex;gap:6px;align-items:center;padding:6px 8px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+#bar .title{font-weight:600;margin-right:10px}
+#bar .sep{width:1px;height:22px;background:var(--line);margin:0 4px}
+#main{display:grid;grid-template-columns:1fr 340px;min-height:0}
+#left{display:grid;grid-template-rows:auto 1fr;min-height:0;border-right:1px solid var(--line)}
+table{width:100%;border-collapse:collapse}
+th{font-weight:400;color:var(--dim);text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0}
+td{padding:5px 8px;border-bottom:1px solid #2f3134;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px}
+tbody tr{cursor:pointer}tbody tr:hover{background:var(--row)}tbody tr.sel{background:var(--sel)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--dim)}
+.on .dot{background:var(--green)}
+#tablewrap{max-height:40vh;overflow:auto}
+#view{display:flex;flex-direction:column;min-height:0;background:#121314}
+#viewbar{display:flex;align-items:center;gap:8px;padding:4px 8px;color:var(--dim);border-top:1px solid var(--line)}
+#viewbox{flex:1;display:flex;align-items:center;justify-content:center;min-height:0;overflow:hidden}
+#pov{max-width:100%;max-height:100%;image-rendering:auto}
+#viewbox .hint{color:var(--dim)}
+#right{display:grid;grid-template-rows:auto auto 1fr;min-height:0;background:var(--bg)}
+#who{display:flex;flex-direction:column;align-items:center;padding:12px 8px 6px}
+#avatar{width:64px;height:64px;border-radius:6px;background:#3d6b5a;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700;position:relative}
+#avatar .dot{position:absolute;right:-4px;bottom:-4px;width:16px;height:16px;border:2px solid var(--bg);margin:0}
+#who .name{font-weight:700;font-size:15px;margin-top:6px}
+#tabs{display:flex;border-bottom:1px solid var(--line)}
+#tabs div{flex:1;text-align:center;padding:7px 0;cursor:pointer;color:var(--dim)}
+#tabs div.act{color:var(--text);border-bottom:2px solid var(--accent)}
+#pane{overflow:auto;padding:8px 10px;min-height:0}
+.kv{display:grid;grid-template-columns:88px 1fr;gap:3px 8px}.kv .k{color:var(--dim)}
+.btns{display:flex;flex-direction:column;gap:4px;margin-top:10px}.btns button{text-align:left}
+.feed div{padding:3px 0;border-bottom:1px solid #303236;white-space:pre-wrap;word-break:break-word}
+.k-user{color:#8fc7ff}.k-model,.k-say{color:var(--text)}.k-dim{color:var(--dim)}.k-tool{color:var(--purple)}
+.k-result{color:#9aa0a6;font-size:12px}.k-event{color:var(--red)}
+.q{background:#4a3a12;border:1px solid var(--amber);border-radius:4px;padding:6px;margin:6px 0}
+.mod{display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px solid #303236;align-items:center}
+.mod .info{color:var(--dim);font-size:12px}
+.sw{width:30px;height:16px;border-radius:8px;background:#55585e;position:relative;flex:none;cursor:pointer}
+.sw::after{content:"";position:absolute;width:12px;height:12px;border-radius:50%;background:#fff;top:2px;left:2px;transition:left .1s}
+.sw.on{background:var(--green)}.sw.on::after{left:16px}
+.inv{display:grid;grid-template-columns:repeat(9,1fr);gap:3px}
+.slot{background:var(--panel);border:1px solid #34363a;border-radius:3px;height:44px;padding:2px;font-size:10px;overflow:hidden;position:relative}
+.slot .c{position:absolute;right:3px;bottom:1px;font-size:11px;font-weight:600}
+.slot.hot{border-color:#4d5b75}
+h4{margin:10px 0 4px;color:var(--dim);font-weight:400}
+.place{display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #303236}
+.place .info{font-size:12px}.c-dim{color:var(--dim)}.c-warn{color:var(--amber)}.c-bad{color:var(--red)}
+.pick{display:flex;gap:4px;margin-bottom:6px}.pick button.act{border-color:var(--accent);background:var(--sel)}
+#cmd{display:flex;gap:6px;padding:6px 8px;border-top:1px solid var(--line)}
+#cmd input{flex:1}
+#status{display:flex;gap:18px;padding:4px 10px;color:var(--dim);font-size:12px;border-top:1px solid var(--line);background:var(--panel)}
+@media (max-width:820px){#main{grid-template-columns:1fr}#right{border-top:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="bar">
+    <span class="title">MelonHack Control</span>
+    <button class="go" onclick="send({type:'connect'})">&#9654; Connect</button>
+    <button class="stop" onclick="send({type:'disconnect'})">&#9632; Disconnect</button>
+    <button onclick="send({type:'respawn'})">&#8635; Respawn</button>
+    <span class="sep"></span>
+    <button class="stop" onclick="send({type:'ai-stop'})">Stop AI</button>
+    <button class="ai" onclick="send({type:'ai-continue'})">Continue AI</button>
+    <span class="sep"></span>
+    <input id="search" placeholder="Search accounts" oninput="render()" style="width:180px">
+  </div>
+  <div id="main">
+    <div id="left">
+      <div id="tablewrap"><table>
+        <thead><tr><th><input type="checkbox" id="all" onclick="checkAll(this.checked)"></th><th>Name</th><th>Status</th><th>Health</th><th>Food</th><th>Position</th><th>AI</th><th>Modules</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table></div>
+      <div id="view">
+        <div id="viewbox"><span class="hint">Pick an account to see what it sees.</span></div>
+        <div id="viewbar"><span id="viewlabel">Live view</span><span style="flex:1"></span>
+          <button id="viewbtn" onclick="toggleView()">Pause view</button></div>
+      </div>
+    </div>
+    <div id="right">
+      <div id="who"><div id="avatar">?<span class="dot"></span></div><div class="name" id="whoname">No account</div></div>
+      <div id="tabs"></div>
+      <div id="pane"></div>
+    </div>
+  </div>
+  <div id="cmd">
+    <input id="input" placeholder="Tell the AI what to do  -  .command runs a client command  -  /command goes to the server" onkeydown="if(event.key==='Enter')submit()">
+    <button class="ai" onclick="submit()">Send</button>
+  </div>
+  <div id="status"><span id="st-online"></span><span id="st-target"></span><span style="flex:1"></span><span id="st-port"></span></div>
+</div>
+<datalist id="enchants">
+  <option value="mending"><option value="unbreaking"><option value="efficiency"><option value="fortune"><option value="silk touch">
+  <option value="sharpness"><option value="smite"><option value="bane of arthropods"><option value="looting"><option value="sweeping edge">
+  <option value="fire aspect"><option value="knockback"><option value="protection"><option value="fire protection"><option value="blast protection">
+  <option value="projectile protection"><option value="feather falling"><option value="respiration"><option value="aqua affinity"><option value="thorns">
+  <option value="depth strider"><option value="frost walker"><option value="power"><option value="punch"><option value="flame">
+  <option value="infinity"><option value="multishot"><option value="piercing"><option value="quick charge"><option value="loyalty">
+  <option value="impaling"><option value="riptide"><option value="channeling"><option value="luck of the sea"><option value="lure">
+  <option value="density"><option value="breach"><option value="lunge">
+</datalist>
+<script>
+const KEY = '__MELON_KEY__';
+const H = {'X-Melon-Key': KEY};
+const host = location.hostname || '127.0.0.1';
+const self = Number(location.port);
+let ports = [self];
+const acc = {};          // port -> {state, feed:[], feedN, ok, fails}
+const checked = new Set();
+let sel = null;
+let tab = 'Account';
+let viewing = true;
+let viewPort = null;
+try { const s = Number(localStorage.getItem('mh-sel')); if (s) sel = s; tab = localStorage.getItem('mh-tab') || tab; } catch (e) {}
+
+const esc = s => String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const base = p => 'http://' + host + ':' + p;
+
+async function peers() {
+  try {
+    const r = await fetch('/api/peers', {headers: H}); const a = await r.json();
+    ports = a.map(o => o.port);
+  } catch (e) {}
+}
+async function poll(p) {
+  const a = acc[p] || (acc[p] = {state:null, feed:[], feedN:0, ok:false, fails:0});
+  try {
+    const r = await fetch(base(p) + '/api/state?feed=' + a.feedN, {headers: H});
+    const s = await r.json();
+    for (const f of (s.feed || [])) { if (f.n <= a.feedN) continue; a.feed.push(f); a.feedN = f.n; }
+    if (a.feed.length > 300) a.feed.splice(0, a.feed.length - 300);
+    a.state = s; a.ok = true; a.fails = 0;
+  } catch (e) { a.fails++; if (a.fails > 2) a.ok = false; }
+}
+async function tick() {
+  await Promise.all(ports.map(poll));
+  for (const k of Object.keys(acc)) if (!ports.includes(Number(k)) && !acc[k].ok) delete acc[k];
+  if (sel == null || !acc[sel]) sel = ports[0];
+  render();
+}
+async function send(cmd, p) {
+  const targets = p != null ? [p] : (checked.size ? [...checked] : [sel]);
+  for (const t of targets) {
+    try { await fetch(base(t) + '/api/cmd', {method:'POST', headers: {'X-Melon-Key': KEY, 'Content-Type': 'application/json'}, body: JSON.stringify(cmd)}); } catch (e) {}
+  }
+  setTimeout(tick, 300);
+}
+function submit() {
+  const i = document.getElementById('input'); const text = i.value.trim();
+  if (!text) return; send({type:'input', text}); i.value = '';
+}
+function job(name, args) { send({type:'job', name, args: args || {}}, sel); }
+function checkAll(v) { checked.clear(); if (v) Object.keys(acc).forEach(k => checked.add(Number(k))); render(); }
+function pick(p) { sel = p; try { localStorage.setItem('mh-sel', p); } catch (e) {} render(); }
+function setTab(t) { tab = t; try { localStorage.setItem('mh-tab', t); } catch (e) {} render(); }
+function toggleView() { viewing = !viewing; viewPort = null; render(); }
+// The Shop tab's add form (kept here so a re-render does not wipe what is being typed).
+let shopKind = 'book', shopName = '', shopLevel = '';
+function shopKindSet(k) { shopKind = k; render(); }
+function shopAdd() {
+  const n = shopName.trim().toLowerCase().replace(/\s+/g, '_'), l = shopLevel.trim();
+  if (!n) return;
+  send({type:'shop-buy', add: shopKind === 'book' ? 'enchanted_book:' + n + (l ? ':' + l : '') : n}, sel);
+  shopName = ''; shopLevel = '';
+  if (document.activeElement) document.activeElement.blur();
+}
+function shopRemove(i) {
+  const s = acc[sel] && acc[sel].state, b = ((s && s.shop) || {}).buy || [];
+  if (b[i]) send({type:'shop-buy', remove: b[i].entry}, sel);
+}
+// The Sell tab's add form, the same way.
+let sellName = '';
+function sellAdd() {
+  const n = sellName.trim().toLowerCase().replace(/\s+/g, '_');
+  if (!n) return;
+  send({type:'sell-list', add: n}, sel);
+  sellName = '';
+  if (document.activeElement) document.activeElement.blur();
+}
+function sellRemove(i) {
+  const s = acc[sel] && acc[sel].state, g = ((s && s.sell) || {}).sell || [];
+  if (g[i]) send({type:'sell-list', remove: g[i].entry}, sel);
+}
+
+function statusOf(s, a) {
+  if (!a.ok) return ['Not running', false];
+  if (!s) return ['Starting', false];
+  if (!s.online) return [s.screen ? 'Offline: ' + s.screen : 'Offline', false];
+  if (s.dead) return ['Dead', false];
+  return ['Online', true];
+}
+function aiText(ai) {
+  if (!ai || ai.running === undefined) return 'off';
+  if (ai.question) return 'asking you';
+  if (ai.running) return 'step ' + ai.steps + (ai.lastAction ? ' ' + ai.lastAction : '');
+  return ai.job || 'idle';
+}
+function render() {
+  const q = document.getElementById('search').value.toLowerCase();
+  const rows = [];
+  let online = 0;
+  const keys = Object.keys(acc).map(Number).sort((a, b) => a - b);
+  for (const p of keys) {
+    const a = acc[p], s = a.state || {};
+    const [st, on] = statusOf(a.state, a); if (on) online++;
+    const name = s.name || ('port ' + p);
+    if (q && !name.toLowerCase().includes(q) && !String(s.instance || '').toLowerCase().includes(q)) continue;
+    const mods = (s.modules || []).filter(m => m.on).map(m => m.name).join(', ');
+    rows.push('<tr class="' + (p === sel ? 'sel' : '') + '" onclick="pick(' + p + ')">'
+      + '<td onclick="event.stopPropagation()"><input type="checkbox" ' + (checked.has(p) ? 'checked' : '') + ' onclick="if(this.checked)checked.add(' + p + ');else checked.delete(' + p + ');render()"></td>'
+      + '<td title="' + esc(s.instance) + '">' + esc(name) + '</td>'
+      + '<td class="' + (on ? 'on' : '') + '"><span class="dot"></span>' + esc(st) + '</td>'
+      + '<td>' + (s.online ? esc(Math.round(s.health)) + '/' + esc(s.maxHealth) : '') + '</td>'
+      + '<td>' + (s.online ? esc(s.food) + '/20' : '') + '</td>'
+      + '<td>' + (s.online ? Math.round(s.x) + ', ' + Math.round(s.y) + ', ' + Math.round(s.z) : '') + '</td>'
+      + '<td>' + esc(aiText(s.ai)) + '</td>'
+      + '<td title="' + esc(mods) + '">' + esc(mods) + '</td></tr>');
+  }
+  document.getElementById('rows').innerHTML = rows.join('') || '<tr><td colspan="8" style="color:var(--dim)">No clients found.</td></tr>';
+  document.getElementById('st-online').textContent = online + ' / ' + keys.length + ' online';
+  document.getElementById('st-target').textContent = checked.size ? 'Orders go to ' + checked.size + ' checked account(s)' : 'Orders go to the selected account';
+  document.getElementById('st-port').textContent = 'this panel: ' + host + ':' + self;
+  renderView(); renderRight();
+}
+function renderView() {
+  const box = document.getElementById('viewbox');
+  const a = acc[sel], s = a && a.state;
+  document.getElementById('viewbtn').textContent = viewing ? 'Pause view' : 'Resume view';
+  document.getElementById('viewlabel').textContent = s ? 'Live view - ' + (s.name || '') + (s.online ? '' : ' (not in a world)') : 'Live view';
+  if (!viewing || !a || !a.ok) { if (viewPort !== null) { box.innerHTML = '<span class="hint">' + (viewing ? 'Not running.' : 'View paused.') + '</span>'; viewPort = null; } return; }
+  if (viewPort === sel) return;
+  viewPort = sel;
+  box.innerHTML = '<img id="pov" alt="" src="' + base(sel) + '/pov?k=' + KEY + '&t=' + Date.now() + '" onerror="povFailed()">';
+}
+// No picture: the client is not rendering (minimised, loading) or the stream dropped. Say so,
+// and try again in a few seconds rather than every tick.
+function povFailed() {
+  document.getElementById('viewbox').innerHTML = '<span class="hint">No picture yet - the game window has to be open and rendering. Retrying...</span>';
+  setTimeout(() => { viewPort = null; }, 4000);
+}
+function renderRight() {
+  const a = acc[sel], s = (a && a.state) || {};
+  const [st, on] = a ? statusOf(a.state, a) : ['', false];
+  document.getElementById('whoname').textContent = s.name || 'No account';
+  document.getElementById('avatar').innerHTML = esc((s.name || '?')[0].toUpperCase()) + '<span class="dot" style="background:' + (on ? 'var(--green)' : 'var(--dim)') + '"></span>';
+  // The Sell tab is the seller's, the Shop tab the buyer's; another account shows Account while it is picked.
+  const tabs = ['Account', 'AI', 'Modules', 'Inventory', 'Places'].concat(s.sell ? ['Sell'] : [], s.shop ? ['Shop'] : []);
+  const cur = tabs.includes(tab) ? tab : 'Account';
+  document.getElementById('tabs').innerHTML = tabs.map(t => '<div class="' + (t === cur ? 'act' : '') + '" onclick="setTab(\'' + t + '\')">' + t + '</div>').join('');
+  const pane = document.getElementById('pane');
+  const keepScroll = cur === 'AI' && pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 20;
+  let h = '';
+  if (cur === 'Account') {
+    const kv = (k, v) => '<div class="k">' + k + '</div><div>' + esc(v) + '</div>';
+    h += '<div class="kv">' + kv('Status', st) + kv('Server', s.server) + kv('Instance', s.instance)
+      + (s.online ? kv('Health', Math.round(s.health) + '/' + s.maxHealth) + kv('Food', s.food + ' / 20')
+        + kv('Position', s.x + ', ' + s.y + ', ' + s.z) + kv('World', s.dim) + kv('Ping', s.ping + ' ms')
+        + kv('Online for', fmt(s.onlineFor)) + (s.goto ? kv('Travelling', s.goto) : '') : '')
+      + kv('Deaths', (s.ai && s.ai.deaths) || 0) + kv('Watching', s.watching) + '</div>';
+    h += '<div class="btns"><button class="go" onclick="send({type:\'connect\'},sel)">&#9654; Connect</button>'
+      + '<button class="stop" onclick="send({type:\'disconnect\'},sel)">&#9632; Disconnect</button>'
+      + '<button onclick="send({type:\'respawn\'},sel)">&#8635; Respawn</button>'
+      + '<button onclick="job(\'go\',{place:\'base\'})">&#8962; Go to base</button></div>';
+  } else if (cur === 'AI') {
+    const ai = s.ai || {};
+    h += '<div class="kv"><div class="k">State</div><div>' + esc(aiText(ai)) + '</div><div class="k">Model</div><div>' + esc(ai.provider) + ' ' + esc(ai.model) + '</div>'
+      + '<div class="k">Order</div><div>' + esc(ai.instruction || '-') + '</div>' + (ai.outcome ? '<div class="k">Result</div><div>' + esc(ai.outcome) + '</div>' : '') + '</div>';
+    if (ai.question) h += '<div class="q"><b>It is asking:</b> ' + esc(ai.question) + '<br><span style="color:var(--dim)">Answer in the box at the bottom.</span></div>';
+    h += '<div class="btns" style="flex-direction:row"><button class="stop" onclick="send({type:\'ai-stop\'},sel)">Stop</button><button class="ai" onclick="send({type:\'ai-continue\'},sel)">Continue</button></div>';
+    h += '<h4>Feed</h4><div class="feed">' + (a ? a.feed : []).map(f => '<div class="k-' + esc(f.kind) + '">'
+      + (f.kind === 'tool' ? '&gt; ' : f.kind === 'user' ? 'You: ' : f.kind === 'event' ? '! ' : '') + esc(f.text) + '</div>').join('') + '</div>';
+  } else if (cur === 'Modules') {
+    const mods = (s.modules || []).slice().sort((x, y) => (y.on - x.on) || x.name.localeCompare(y.name));
+    h += mods.map(m => '<div class="mod"><div><div>' + esc(m.name) + ' <span class="info">' + esc(m.cat) + '</span></div>'
+      + (m.info ? '<div class="info">' + esc(m.info) + '</div>' : '') + '</div><div class="sw ' + (m.on ? 'on' : '') + '" onclick="send({type:\'toggle\',text:\'' + esc(m.name) + '\'},sel)"></div></div>').join('');
+  } else if (cur === 'Inventory') {
+    const inv = {}; (s.inventory || []).forEach(i => inv[i.slot] = i);
+    const tile = (i, hot) => { const it = inv[i]; return '<div class="slot' + (hot ? ' hot' : '') + '" title="' + (it ? esc(it.id + ' x' + it.count + (it.dur ? ' (' + it.dur + ')' : '')) : '') + '">'
+      + (it ? esc(it.id.replace(/_/g, ' ')) + '<span class="c">' + (it.count > 1 ? it.count : '') + '</span>' : '') + '</div>'; };
+    h += '<h4>Armour and offhand</h4><div class="inv">' + [39, 38, 37, 36, 40].map(i => tile(i)).join('') + '</div>';
+    h += '<h4>Inventory</h4><div class="inv">'; for (let i = 9; i < 36; i++) h += tile(i); h += '</div>';
+    h += '<h4>Hotbar</h4><div class="inv">'; for (let i = 0; i < 9; i++) h += tile(i, true); h += '</div>';
+    h += '<div class="btns"><button onclick="job(\'store\',{})">Put everything but the hotbar away</button></div>';
+  } else if (cur === 'Places') {
+    h += (s.places || []).map(p => '<div class="place"><div><b>' + esc(p.name) + '</b><div class="info" style="color:var(--dim)">' + p.x + ' ' + p.y + ' ' + p.z + '</div></div>'
+      + '<button class="go" onclick="job(\'go\',{place:\'' + esc(p.name) + '\'})">Go</button></div>').join('') || '<div style="color:var(--dim)">No saved places yet.</div>';
+    h += '<h4>Save where it stands now</h4><div style="display:flex;gap:6px"><input id="pname" placeholder="name, e.g. farm" style="flex:1">'
+      + '<button onclick="const n=document.getElementById(\'pname\').value.trim();if(n)job(\'save_place\',{name:n})">Save</button></div>';
+  } else if (cur === 'Sell') {
+    const se = s.sell;
+    h += '<div class="kv"><div class="k">Carrying</div><div>' + esc(se.emeralds) + ' emeralds</div>'
+      + '<div class="k">Emeralds go to</div><div class="' + (se.emeraldChest ? '' : 'c-warn') + '">' + esc(se.emeraldChest ? 'the chest signed "emeralds" at ' + se.emeraldChest : 'no chest signed "emeralds" - they stay in the bags') + '</div></div>';
+    if (!se.box) h += '<div class="q">No box found yet (the corner signs), so the chests and villagers cannot be checked.</div>';
+    h += '<h4>Selling</h4>';
+    h += (se.sell || []).map((g, i) => '<div class="place"><div><b>' + esc(g.error ? g.entry : g.label) + '</b>' + (g.carried ? ' <span class="info c-dim">' + esc(g.carried) + ' carried</span>' : '') + '<div class="info '
+        + (g.error ? 'c-bad">' + esc(g.error)
+          : !g.chest ? 'c-warn">no chest signed "' + esc(g.sign) + '" - nothing to sell until there is one'
+          : !g.buyers ? 'c-warn">chest at ' + esc(g.chest) + ', but no villager in the box buys it' + (g.jobs ? ' (the jobs that do: ' + esc(g.jobs) + ')' : '')
+          : 'c-dim">chest' + (g.chests > 1 ? 's' : '') + ' signed "' + esc(g.sign) + '" (' + esc(g.chest) + (g.chests > 1 ? ' and ' + (g.chests - 1) + ' more' : '') + '), ' + esc(g.buyers) + ' villager' + (g.buyers > 1 ? 's' : '') + ' to sell to') + '</div></div>'
+        + '<button class="stop" onclick="sellRemove(' + i + ')">Remove</button></div>').join('') || '<div class="c-dim">Nothing on the list yet.</div>';
+    h += '<h4>Add</h4><div id="sellform"><div style="display:flex;gap:6px"><input id="sellname" placeholder="item, e.g. iron_ingot or wheat"'
+      + ' value="' + esc(sellName) + '" oninput="sellName=this.value" onkeydown="if(event.key===\'Enter\')sellAdd()" style="flex:1;min-width:0">'
+      + '<button class="go" onclick="sellAdd()">Add</button></div>'
+      + '<div class="info c-dim" style="margin-top:4px">The item\'s id. Sign its chest with the same name - an ingot\'s with the metal (iron, gold). It is sold to the villagers whose job buys it.</div>'
+      + (se.note ? '<div style="margin-top:6px">' + esc(se.note) + '</div>' : '') + '</div>';
+  } else if (cur === 'Shop') {
+    const sh = s.shop;
+    h += '<div class="mod"><div><div>Buying</div><div class="info">Spends the emeralds from the chest signed "spend" on the list below.</div></div>'
+      + '<div class="sw ' + (sh.spend ? 'on' : '') + '" onclick="send({type:\'shop-spend\',on:' + !sh.spend + '},sel)"></div></div>';
+    h += '<div class="kv" style="margin-top:6px"><div class="k">Carrying</div><div>' + esc(sh.emeralds) + ' emeralds, ' + esc(sh.books) + ' books</div>'
+      + '<div class="k">Emeralds from</div><div class="' + (sh.spendChest ? '' : 'c-warn') + '">' + esc(sh.spendChest ? 'the chest signed "spend" at ' + sh.spendChest : 'no chest signed "spend" - nothing to buy with') + '</div></div>';
+    if (sh.stopped) h += '<div class="q c-bad" style="border-color:var(--red)">Buying stopped: a trade handed over something that is not on the list. Restart the buyer to buy again.</div>';
+    if (!sh.box) h += '<div class="q">No box found yet (the corner signs), so the chests cannot be checked.</div>';
+    h += '<h4>Buying</h4>';
+    h += (sh.buy || []).map((b, i) => '<div class="place"><div><b>' + esc(b.error ? b.entry : b.label) + '</b><div class="info '
+        + (b.error ? 'c-bad">' + esc(b.error) : b.chest ? 'c-dim">chest at ' + esc(b.chest) : 'c-warn">no chest signed "' + esc(b.sign) + '" - not bought until there is one') + '</div></div>'
+        + '<button class="stop" onclick="shopRemove(' + i + ')">Remove</button></div>').join('') || '<div class="c-dim">Nothing on the list yet.</div>';
+    if (sh.needsBooks) h += '<div class="place"><div><b>Books</b> <span class="info c-dim">one per enchanted book</span><div class="info '
+        + (sh.booksChest ? 'c-dim">chest signed "books" at ' + esc(sh.booksChest) : 'c-warn">no chest signed "books" - enchanted books cannot be bought') + '</div></div></div>';
+    const book = shopKind === 'book';
+    h += '<h4>Add</h4><div id="shopform"><div class="pick">'
+      + '<button class="' + (book ? 'act' : '') + '" onclick="shopKindSet(\'book\')">Enchanted book</button>'
+      + '<button class="' + (book ? '' : 'act') + '" onclick="shopKindSet(\'item\')">Block or item</button></div>'
+      + '<div style="display:flex;gap:6px"><input id="shopname" ' + (book ? 'list="enchants" placeholder="enchantment, e.g. mending"' : 'placeholder="item, e.g. glowstone"')
+      + ' value="' + esc(shopName) + '" oninput="shopName=this.value" onkeydown="if(event.key===\'Enter\')shopAdd()" style="flex:1;min-width:0">'
+      + (book ? '<input id="shoplevel" placeholder="lowest level" title="blank = any level; 5 or V = only level 5 and up" value="' + esc(shopLevel) + '" oninput="shopLevel=this.value" onkeydown="if(event.key===\'Enter\')shopAdd()" style="width:96px">' : '')
+      + '<button class="go" onclick="shopAdd()">Add</button></div>'
+      + '<div class="info c-dim" style="margin-top:4px">' + (book
+        ? 'Leave the level blank for any level. Sign its chest with the enchantment\'s name (e.g. Mending); the plain books it pays with come from the chest signed "books".'
+        : 'The item\'s id, e.g. glowstone or sea lantern. Sign its chest with the same name.') + '</div>'
+      + (sh.note ? '<div style="margin-top:6px">' + esc(sh.note) + '</div>' : '') + '</div>';
+  }
+  // Typing in the Shop or Sell form: leave the pane alone until it loses focus (a re-render would
+  // close the suggestions list under the cursor).
+  const ae = document.activeElement;
+  if ((cur === 'Shop' || cur === 'Sell') && ae && ae.tagName === 'INPUT' && ae.closest('#shopform, #sellform')) return;
+  const active = document.activeElement && document.activeElement.id === 'pname' ? document.getElementById('pname').value : null;
+  pane.innerHTML = h;
+  if (active !== null) { const e = document.getElementById('pname'); e.value = active; e.focus(); }
+  if (keepScroll) pane.scrollTop = pane.scrollHeight;
+}
+function fmt(sec) { sec = sec || 0; const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60); return (h ? h + 'h ' : '') + m + 'm ' + (sec % 60) + 's'; }
+
+peers().then(tick);
+setInterval(peers, 5000);
+setInterval(tick, 1000);
+</script>
+</body>
+</html>
