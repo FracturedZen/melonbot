@@ -9,78 +9,235 @@ stasis bot by EnderKill98 (MIT). See [Credits](#credits).
 
 What is in it:
 
-- **The melon farmer** (`start-melon-farmer.cmd`, `melonbot run <folder>`): a port of the MelonHack
-  Java client's melon routine. It flies to its farm, harvests with a Silk Touch axe, keeps itself fed
-  and tooled from signed chests, and prints `.litematic` / `.schem` builds out of melons.
-- **The botswarm** (`start-botswarm.cmd`, `melonbot swarm`): any number of accounts in one process,
-  with formations, follow-me, a box nuker, a printer and combat. It can take orders from a
-  controller (a Java client) as well as from its panel.
-- **The perimeter bots** (`start-perimeter.cmd`, `melonbot perimeter`): clear a box from build height
-  down to bedrock, sealing water and lava as they go.
-- **The seller and the buyer** (`start-seller.cmd`, `start-buyer.cmd`): trade with the villagers in a
-  pen, selling goods for emeralds and spending emeralds on a buy list.
-- **The mapart bot** (`start-mapart.cmd`): builds carpet map art on a platform, one map at a time.
-  It lays the carpets, maps them, locks and names the map, stores it and washes the platform clear.
-  Maps come in through a folder, or through Discord if you set that up.
+- **[The melon farmer](#the-melon-farmer)** (`start-melon-farmer.cmd`): flies to its melon farm,
+  harvests with a Silk Touch axe, keeps itself fed and tooled from signed chests, and prints
+  `.litematic` / `.schem` builds out of melons.
+- **[The botswarm](#the-botswarm)** (`start-botswarm.cmd`): up to 10 accounts in one process, with
+  formations, follow-me, a box nuker, a printer and combat.
+- **[The perimeter bots](#the-perimeter-bots)** (`start-perimeter.cmd`): clear a box from build
+  height down to bedrock, sealing water and lava as they go.
+- **[The seller and the buyer](#the-seller-and-the-buyer)** (`start-seller.cmd`,
+  `start-buyer.cmd`): trade with the villagers in a pen, selling goods for emeralds and spending
+  emeralds on a buy list.
+- **[The mapart bot](#the-mapart-bot)** (`start-mapart.cmd`): builds carpet map art on a platform,
+  one map at a time. It lays the carpets, maps them, locks and names the map, stores it and washes
+  the platform clear. Maps come in through a folder, or through Discord if you set that up.
 
 Use them only on servers that allow bots.
 
-## Build (Windows)
+## Getting started
 
-- Rust nightly (`rust-toolchain.toml` pins it) and the Visual Studio 2022 C++ Build Tools.
-- `cargo build --release`. The launchers run `target\release\melonbot.exe`.
+### Build (Windows)
 
-## Accounts, folders and the first sign-in
+1. Install Rust with [rustup](https://rustup.rs). The repo's `rust-toolchain.toml` picks the
+   nightly it needs, and rustup fetches it on the first build.
+2. Install the Visual Studio 2022 Build Tools with **Desktop development with C++**.
+3. Get the code and build it:
+   ```
+   git clone https://github.com/FracturedZen/melonbot
+   cd melonbot
+   cargo build --release
+   ```
 
-Every bot of its own has a folder `bots/<folder>/` holding its `config.json`, its Microsoft login
-cache (`azalea-auth.json`) and its logs. The swarm and perimeter accounts live in `swarm/bots/<name>/`.
-`bots/`, `swarm/` and `perimeter/` are git-ignored. They hold logins and webhooks, so never commit
-or share them.
+The launchers (`start-*.cmd`) run `target\release\melonbot.exe` from the repo folder. Double-click
+one, or run it from a terminal in that folder. A launcher restarts its bot 30 s after it stops,
+except after a deliberate logout (see [Troubleshooting](#troubleshooting)). Close its window to
+stop it.
 
-The first start of a bot prints a microsoft.com/link address and a code. Sign in with the account
-the bot is to play as. The login is cached from then on. Leave `"account"` empty in config.json and
-the first sign-in fills it in. Once set, a login that comes back as anyone else is refused.
+### Folders and the first sign-in
 
-Never run a bot and a Java client on the same account at once.
+Each bot of its own (farmer, seller, buyer, mapart) has a folder `bots/<folder>/`. It holds the
+bot's `config.json`, its optional `modules.json`, its Microsoft login cache (`azalea-auth.json`)
+and its logs. The botswarm and the perimeter bots keep their accounts in `swarm/bots/<name>/`.
 
-## Settings (config.json)
+`bots/`, `swarm/` and `perimeter/` are git-ignored. They hold logins, webhooks and tokens, so never
+commit or share them.
 
-The main fields:
+The first start of a bot prints a microsoft.com/link address and a code in its window. Open the
+address, enter the code, and sign in with the account the bot is to play as. The login is cached
+from then on. Leave `"account"` empty in config.json and the first sign-in fills it in. Once set, a
+login that comes back as anyone else is refused.
 
-- `server`: the server to join (`host` or `host:port`).
-- `queue_command`, `queue_trigger`: for a server with a queue/lobby. When chat matches the trigger
-  (a regex), the bot sends the command every minute until it is back. Leave `queue_command` empty
-  for none.
-- `discord_webhook`, `discord_name`: optional Discord posts. The webhook is never printed.
-- `player_guard`, `friends`: with the guard on, any player in view who is not a friend or one of
-  your own accounts makes the bot log out and stay out (exit code 3) until relaunched.
-- `board_server`: the server whose melon statistics go to a MelonBoard leaderboard. Its URL goes in
-  `bots/<folder>/melonboard.json` (`endpoint`). Empty means no reporting.
+Never run a bot and a game client on the same account at once.
 
-`melonbot import "<Java instance folder>"` writes a melon farmer's config.json from a MelonHack Java
-instance: the account guard, Discord, queue settings, farm plot, base and signed chests.
+### config.json
+
+Every bot of its own needs `bots/<folder>/config.json`. A minimal one:
+
+```json
+{
+  "server": "play.example.net",
+  "job": "mapart"
+}
+```
+
+The fields any bot can have:
+
+| Field | What it does |
+| --- | --- |
+| `server` | The server to join (`host` or `host:port`). |
+| `account` | The account it plays as. Leave it empty; the first sign-in fills it in. |
+| `job` | `"seller"`, `"buyer"` or `"mapart"`. Empty (or left out) is the melon farmer. |
+| `player_guard` | On by default. See [The player guard](#the-player-guard). |
+| `friends` | Players the guard never logs out for. |
+| `queue_command`, `queue_trigger` | For a server with a queue or lobby. When chat matches the trigger (a regex), the bot sends the command every minute until it is back. Empty command: off. |
+| `discord_webhook`, `discord_name` | Optional Discord posts through a webhook. The webhook is never printed. |
+| `board_server` | The server whose melon statistics go to a MelonBoard leaderboard. Its URL goes in `bots/<folder>/melonboard.json` (`endpoint`). Empty: no reporting. |
+
+Each bot's own fields are in its section below.
+
+### modules.json
+
+Optional, in `bots/<folder>/modules.json`, in the shape of the MelonHack client's
+`standalone.json`: each module's name, whether it is on, and its settings.
+
+```json
+{
+  "control-panel": { "enabled": true, "settings": { "port": 6972 } },
+  "auto-eat": { "enabled": true, "settings": {} },
+  "kill-aura": { "enabled": true, "settings": { "targets": ["minecraft:zombie", "minecraft:skeleton"], "range": 4.5, "auto-weapon": true } }
+}
+```
+
+- `control-panel`: the bot's own web page, on `http://127.0.0.1:<port>/`. **Without it the bot has
+  no panel.** Give each bot its own port (the melon farmer's is 6971). If that port is taken, the
+  next free one up to 20 higher is used, and the log says which.
+- `auto-eat`: eats from what it carries. The melon farmer only eats with this on. The seller,
+  buyer and mapart bot eat anyway.
+- `kill-aura`: hits the listed mobs in range. With a mace in the hotbar, mobs farther out are
+  struck from above. It never strikes past the world border.
+- `ai-pilot`: the melon farmer's routine (see [The melon farmer](#the-melon-farmer)).
+
+### The player guard
+
+`player_guard` is on unless you set `"player_guard": false`. With it on, any other player who comes
+into view makes the bot log out and stay out until you start it again.
+
+Players who never count:
+
+- your own accounts: every account the bots sign in with is written to
+  `%USERPROFILE%\.melonhack\own-accounts.txt`. Add your main account there, one name a line, so
+  visiting your own bot does not log it out;
+- the names in `friends`.
+
+### Control panels
+
+| Panel | Address | Opens with |
+| --- | --- | --- |
+| A bot's own | `http://127.0.0.1:<port>/` from its modules.json (melon farmer: 6971) | `open-panel.cmd` (6971) |
+| The botswarm | http://127.0.0.1:7000/ | `open-swarm-panel.cmd` |
+| The perimeter bots | http://127.0.0.1:7100/ | `open-perimeter-panel.cmd` |
+
+The panels only answer on this PC (127.0.0.1).
 
 ## The melon farmer
 
-```
-melonbot import "<path to the Java instance>"
-start-melon-farmer.cmd <folder>
-```
+It runs in a loop:
 
-Its control panel is http://127.0.0.1:6971/ (`open-panel.cmd`).
+1. Food: from the chest signed `food`, or melon slices when that is empty.
+2. A usable Silk Touch axe: worn ones go into the chest signed `repair`, and the best one comes
+   out of the chest signed `tools`.
+3. Melon blocks from the farm, until its bags are full.
+4. The next build on its list, printed out of those melons.
+
+Once the list is built, it lays a melon floor on open water around its base, or a ceiling art if
+you set one.
+
+### Setting it up
+
+1. Near its base, put chests signed `tools` (Silk Touch axes), `repair` (empty, for worn axes) and
+   `food`.
+2. Write `bots/<folder>/config.json`:
+   ```json
+   {
+     "server": "play.example.net",
+     "base": { "x": 100, "y": 64, "z": 100 },
+     "farm": { "min": { "x": 120, "y": 60, "z": 120 }, "max": { "x": 180, "y": 66, "z": 180 } },
+     "schematics": "C:\\Users\\you\\schematics"
+   }
+   ```
+   - `base`: where it lives; the signed chests are found around it.
+   - `farm`: two corners of the melon farm.
+   - `schematics`: the folder its build files are read from.
+3. Write `bots/<folder>/modules.json`:
+   ```json
+   {
+     "control-panel": { "enabled": true, "settings": { "port": 6971 } },
+     "auto-eat": { "enabled": true, "settings": {} },
+     "ai-pilot": { "settings": {
+       "routine": "Melon",
+       "auto-continue": true,
+       "melon-builds": ["Castle.litematic", "Tower.schem"],
+       "melon-floor-y": 64
+     } }
+   }
+   ```
+   - `routine` `"Melon"` with `auto-continue` on starts the routine after every join.
+   - `melon-builds`: the files in the schematics folder, built in that order. Each goes at the
+     nearest open spot at least `melon-home-clear` blocks (200) from the base and the farm, and
+     `melon-gap` blocks (20) clear of anything built.
+   - After the list: `melon-floor` (default `MELON FLOOR.litematic`) is laid on open water at
+     `melon-floor-y`, spiralling out from the base. Set `melon-ceiling` to a file to lay that art
+     instead.
+4. Run `start-melon-farmer.cmd <folder>`. Without a folder it uses `bots/MelonFarmer/`.
+
+Its panel is http://127.0.0.1:6971/ (`open-panel.cmd`). There you can start and stop the routine,
+or disconnect the bot. Its progress (builds done, sites, melons mined) is kept in
+`bots/<folder>/melon-routine.json`.
+
+`melonbot schem <file>` prints what it would build from a schematic.
+
+If you run the MelonHack Java client, `melonbot import "<instance folder>"` writes the config.json
+and modules.json from that instance: its account, Discord, queue settings, farm plot, base and
+chests.
 
 ## The botswarm
 
-Its panel is http://127.0.0.1:7000/ (`open-swarm-panel.cmd`). Add accounts there. Each gets a
-microsoft.com/link code on the page. From the panel you set orders, formations, the nuker box, the
-printer, the ender chest link and combat. Settings are in `swarm/swarm.json`.
+`start-botswarm.cmd` runs every swarm account in one process. Its panel is
+http://127.0.0.1:7000/ (`open-swarm-panel.cmd`). The first start writes `swarm/swarm.json`: set its
+`server` to yours, then start it again.
 
-## Perimeter bots
+- **Accounts**: press **+ Add account** on the panel. It shows a microsoft.com/link code. Sign in
+  with the account to add (not one with a bot of its own, nor the one you play on), and it joins
+  the swarm. Up to 10 are online at once (`max_bots`).
+- **Orders**, for the whole swarm or one bot: hold, go to a point (several bots spread around it),
+  come here, stay near a player, or take a formation.
+- **Formations**: circle, square, triangle, star, heart, wave, sphere, helix, cube, line, scatter
+  or random, around a centre. A shape can flow or turn at a set speed.
+- **The nuker**: clear a box set on the panel. Each bot takes the nearest free 8x8 column, so no
+  two dig the same place.
+- **The printer**: the swarm prints, between them, what you have placed in Litematica on a Java
+  client running the MelonHack controller mod. The schematic file comes from `swarm/schematics/`,
+  else from where Litematica found it.
+- **Combat**: with Defend on, the bots fight hostile mobs and any player who hits one of them.
+  Friends and your own accounts are never attacked. You can also set an attack target.
+- **The ender chest link**: each bot keeps its ender chest open from a distance, and takes tools,
+  weapons, food and gear from it as needed.
+- **Supplies**: food from a chest signed `food`, tools from a chest signed `tools`, and what the
+  nuker collects into a chest signed `storage`.
+
+Settings are in `swarm/swarm.json` (server, panel port, speed, friends, signs) and
+`swarm/modules.json` (module settings shared by every swarm bot). The swarm can also take orders
+from a MelonHack Java client running the controller mod (its Come Here, Stay Near, nuker and
+printer). Everything else works from the panel alone.
+
+## The perimeter bots
 
 `start-perimeter.cmd` clears a box from build height down to bedrock. Its panel is
-http://127.0.0.1:7100/ (`open-perimeter-panel.cmd`). There you tick the accounts it opens, add
-accounts, set the box, run or pause, and watch a map of the box. A new box starts paused. The
-accounts are the botswarm's (`swarm/bots/`), and an account runs in one of the two at a time.
+http://127.0.0.1:7100/ (`open-perimeter-panel.cmd`). The accounts are the botswarm's
+(`swarm/bots/`), added on either panel. An account runs in one of the two at a time.
+
+### Setting it up
+
+1. Near where they will work, put chests signed `tools` (pickaxes, shovels and axes), `repair`
+   (empty, for worn tools) and `food`.
+2. Start `start-perimeter.cmd` once. It writes `perimeter/perimeter.json`: set its `server` to
+   yours, and start it again. Then open its panel.
+3. Tick the accounts it should run (add them there if they are new).
+4. Log each account in by the signed chests once. It records them as its base.
+5. Set the box's corners, then press Run. A new box starts paused.
+
+### How it digs
 
 - The box is cut in 8x8 cells, a band at a time from the top. No cell goes deeper than a neighbour
   that is higher, or more than two bands below the highest ground left. The box is scouted first,
@@ -95,16 +252,19 @@ accounts are the botswarm's (`swarm/bots/`), and an account runs in one of the t
 - A block the server keeps putting back (WorldGuard, a world border) is left standing. So is a whole
   side of the box once three of its blocks were. A block holding back water or lava there, which no
   block can be put into, stays too, as a wall.
-- Log each account in by the chests signed `tools`, `repair` and `food`, and it records them there.
-  Worn tools go into Repair. A pickaxe, shovel and axe come out of Tools, and food out of Food.
+- Worn tools go into `repair`. A pickaxe, shovel and axe come out of `tools`, and food out of
+  `food`.
+- A bot that is being hurt fast logs out and stays out (its reason shows on the panel). The totem
+  stays in its offhand.
 
 Files: `perimeter/job.json` (the box and settings), `progress.json` (every cell's floor),
 `accounts.json`, `bases.json`, and logs in `perimeter/logs/` and `perimeter/bots/<name>/debug/`.
 
-## Seller and buyer (the villager pen)
+## The seller and the buyer
 
 Two bots share a pen of villagers, marked out by corner signs reading `1`, `2`, ... (or `bounds` in
-config.json). Each finds its chests by the signs on them, and only moves inside the box.
+config.json). Each finds its chests by the signs on them, and only moves inside the box. Both eat
+from the chest signed `food`, and respawn on the bed set inside the box.
 
 - **Seller** (`start-seller.cmd`, `"job": "seller"`): sells the `sell` list for emeralds. Each good
   comes from the chests signed with its name (an ingot's with the metal: `iron`, `gold`; `sticks`
@@ -116,9 +276,18 @@ config.json). Each finds its chests by the signs on them, and only moves inside 
   own inventory into 9 stacks of emeralds, which needs 10 free slots. It spends the emeralds on the
   `buy` list: blocks, and enchanted books paid with a book from the chest signed `books`. It banks
   each kind in the chest signed with its name. The seller never banks into a `spend` chest, and the
-  buyer never touches the `emeralds` chest. Edit the list on the **Shop** tab.
+  buyer never touches the `emeralds` chest. Edit the list on the **Shop** tab, and turn spending on
+  there (`spend_emeralds`).
 
-Both eat from the chest signed `food`, and respawn on the bed set inside the box.
+### Setting them up
+
+1. Make `bots/<folder>/config.json` for each, with `"job": "seller"` or `"job": "buyer"` and the
+   server.
+2. Add a `modules.json` with `control-panel` on (a different port each) to get the Sell and Shop
+   tabs.
+3. The seller's folder is its account name: open `start-seller.cmd` and set `ACCOUNT` to it. The
+   buyer's folder is `bots/Buyer/`.
+4. Start them, and sign in on the first start.
 
 ## The mapart bot
 
@@ -144,7 +313,8 @@ map it:
 
 The art must be flat and made of carpet only, in whole maps. A 1x1 is 128x128. A 2x2 is built as
 its four maps, one after another, named `2X2 "Castle" c1r1`, `c2r1` and so on. Exports from
-mapartcraft work as they are; their cobblestone support line is left out.
+[mapartcraft](https://rebane2001.com/mapartcraft/) work as they are; their cobblestone support line
+is left out.
 
 ### The site
 
@@ -170,16 +340,24 @@ and the bot waits until it is there.
 
 ### Setting it up
 
-1. Make `bots/Mapart/config.json` with `{"job": "mapart", "server": "<your server>"}`. The other
-   fields are as in [Settings](#settings-configjson).
-2. Run `start-mapart.cmd`. The first start signs in (a microsoft.com/link code).
-3. Log the bot out at its site, by its bed. It looks for the platform in the maps around where it
+1. Make `bots/Mapart/config.json`:
+   ```json
+   {
+     "server": "play.example.net",
+     "job": "mapart"
+   }
+   ```
+   If other players come by the site, add them to `friends` or set `"player_guard": false` (see
+   [The player guard](#the-player-guard)).
+2. For its control panel, add `bots/Mapart/modules.json` with `control-panel` on (see
+   [modules.json](#modulesjson)).
+3. Run `start-mapart.cmd`. The first start signs in (a microsoft.com/link code).
+4. Log the bot out at its site, by its bed. It looks for the platform in the maps around where it
    is.
-4. Drop a map in the inbox.
+5. Drop a map in the inbox.
 
-Its log is in `bots/Mapart/logs/`. Its control panel is on the first free port from
-http://127.0.0.1:6970/ (the log says which). The queue is kept in `bots/Mapart/queue.json` and the
-files in `bots/Mapart/maps/`, so a restart loses nothing.
+Its log is in `bots/Mapart/logs/`. The queue is kept in `bots/Mapart/queue.json` and the files in
+`bots/Mapart/maps/`, so a restart loses nothing.
 
 ### Discord for the mapart bot
 
@@ -196,6 +374,19 @@ Discord is optional. Without it, the inbox is the only way in.
 
 On Discord, the bot only says whether a map was taken and when one is finished. It never posts a
 coordinate.
+
+## Troubleshooting
+
+- **Logs**: a bot of its own logs to `bots/<folder>/logs/` and `bots/<folder>/debug/`, the swarm to
+  `swarm/debug/` and `swarm/bots/<name>/debug/`, the perimeter bots to `perimeter/logs/` and
+  `perimeter/bots/<name>/debug/`.
+- **It logged out and did not come back**: that was on purpose (exit code 3). A player came into
+  view with the guard on, it was being hurt fast, or you pressed Disconnect. Start it again.
+- **"logging in too fast" or a 503 at sign-in**: several bots joined at once. Start them a little
+  apart.
+- **No control panel**: a bot of its own only has one with `control-panel` in its modules.json.
+- **Two of the same bot**: a launcher refuses to start a bot that is already running in another
+  window.
 
 ## Credits
 
