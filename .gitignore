@@ -6,3 +6,7 @@
 /swarm/
 # The perimeter bots' settings, progress and logs.
 /perimeter/
+# Map art and schematics dropped in the repo folder are someone's own: never commit them.
+/*.nbt
+/*.litematic
+/*.schem

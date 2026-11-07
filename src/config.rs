@@ -60,8 +60,9 @@ pub struct Config {
     /// The instance name the control panel reports (the Java instance's) - the Discord status
     /// watcher finds its bot by it.
     pub instance: String,
-    /// Which routine this bot runs: "seller" sells to the villagers in a pen, "buyer" buys from them.
-    /// Empty or anything else = the melon routine, gated as before by modules.json.
+    /// Which routine this bot runs: "seller" sells to the villagers in a pen, "buyer" buys from them,
+    /// "mapart" builds carpet map art sent in on Discord (mapart/). Empty or anything else = the
+    /// melon routine, gated as before by modules.json.
     pub job: String,
     /// The seller's or the buyer's perimeter: it stays inside this box. Left unset, it is read once
     /// from the corner signs ("1", "2", ...) placed in the world.
@@ -82,6 +83,13 @@ pub struct Config {
     /// refused (every enchanted book has that id). Nothing without a signed chest is bought.
     /// Both can be changed from the control panel's Shop tab while the bot runs; it saves them here.
     pub buy: Vec<String>,
+    /// Mapart: the Discord server, channel and role it works with, by id (the names are for
+    /// people). Its Discord bot token is bots/<name>/discord-token.txt - never in here.
+    pub discord_guild_id: String,
+    pub discord_channel_id: String,
+    pub discord_role_id: String,
+    pub discord_channel: String,
+    pub discord_role: String,
 }
 
 impl Default for Config {
@@ -107,6 +115,11 @@ impl Default for Config {
             sell: vec!["stick".into(), "iron_ingot".into()],
             spend_emeralds: false,
             buy: Vec::new(),
+            discord_guild_id: String::new(),
+            discord_channel_id: String::new(),
+            discord_role_id: String::new(),
+            discord_channel: String::new(),
+            discord_role: String::new(),
         }
     }
 }
@@ -129,9 +142,15 @@ impl Config {
         self.job.eq_ignore_ascii_case("buyer")
     }
 
-    /// A job in the villager pen - the seller or the buyer - not the melon routine.
+    /// The mapart builder: maps sent in on Discord, built in carpet on water (mapart/).
+    pub fn is_mapart(&self) -> bool {
+        self.job.eq_ignore_ascii_case("mapart")
+    }
+
+    /// A job of its own in a marked-out place - the seller or the buyer in the villager pen, the
+    /// mapart builder at its site - not the melon routine.
     pub fn in_pen(&self) -> bool {
-        self.is_seller() || self.is_buyer()
+        self.is_seller() || self.is_buyer() || self.is_mapart()
     }
 
     pub fn save(&self, dir: &Path) -> Result<()> {

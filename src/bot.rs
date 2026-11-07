@@ -60,6 +60,8 @@ pub struct Shared {
     pub autoeat_on: AtomicBool,
     pub killaura_on: AtomicBool,
     pub deaths: AtomicU32,
+    /// Health lost in the last half minute, newest last (the perimeter's auto-log reads it).
+    pub hurts: Mutex<Vec<Hurt>>,
     /// A swarm bot: its link to the swarm (orders, controller, modules). None for a bot of its own.
     pub swarm: Option<Arc<crate::swarm::BotLink>>,
     /// MelonBoard reporting (the melon farmer, on config.json's board_server only).
@@ -68,6 +70,17 @@ pub struct Shared {
     /// panel's Sell and Shop tabs.
     pub shop: Mutex<crate::seller::Shop>,
 }
+
+/// Health lost: when, how much, and from what ("arrow", "fall", ...).
+#[derive(Clone, Debug)]
+pub struct Hurt {
+    pub at: Instant,
+    pub lost: f32,
+    pub from: Vec<String>,
+}
+
+/// Hurts kept this long.
+const HURTS_KEPT: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
 struct Inner {
@@ -119,7 +132,8 @@ impl State {
         }
         let harvest = cfg.farm.map(|f| Harvester::new(f, &modules));
         let modules_kept = modules.clone();
-        let killaura = KillAura::from_config(&modules);
+        // A bot of its own hits with what it holds: the farmer's hand is its axe's.
+        let killaura = KillAura::from_config(&modules).map(KillAura::hand_only);
         // As the Java client: routine=Melon starts by itself after a join when auto-continue is on.
         // The seller and the buyer (cfg.job) start the same way. Never alongside a test script, and
         // never with --no-routine.
@@ -128,7 +142,15 @@ impl State {
             && (in_pen
                 || (modules.get::<String>("ai-pilot", "routine", String::new()) == "Melon"
                     && modules.get("ai-pilot", "auto-continue", false)));
-        let job = if cfg.is_seller() { "seller" } else if cfg.is_buyer() { "buyer" } else { "melon routine" };
+        let job = if cfg.is_seller() {
+            "seller"
+        } else if cfg.is_buyer() {
+            "buyer"
+        } else if cfg.is_mapart() {
+            "mapart builder"
+        } else {
+            "melon routine"
+        };
         info!("{job} {}", if routine_on { "ON - starts after each join" } else { "off" });
         // The control panel on the instance's port (6971 for the melon farmer), as the Java client served it.
         let panel = if modules.enabled("control-panel") || modules.get::<u16>("control-panel", "port", 0) > 0 {
@@ -161,6 +183,7 @@ impl State {
                 autoeat_on: AtomicBool::new(true),
                 killaura_on: AtomicBool::new(true),
                 deaths: AtomicU32::new(0),
+                hurts: Mutex::new(Vec::new()),
                 swarm: None,
                 board,
                 shop,
@@ -196,6 +219,7 @@ impl State {
                 autoeat_on: AtomicBool::new(true),
                 killaura_on: AtomicBool::new(true),
                 deaths: AtomicU32::new(0),
+                hurts: Mutex::new(Vec::new()),
                 swarm: Some(link),
                 board: None,
                 shop,
@@ -250,6 +274,8 @@ impl Shared {
                 crate::seller::run(bot, ctx).await;
             } else if ctx.cfg.is_buyer() {
                 crate::buyer::run(bot, ctx).await;
+            } else if ctx.cfg.is_mapart() {
+                crate::mapart::run(bot, ctx).await;
             } else {
                 crate::routine::run(bot, ctx).await;
             }
@@ -417,6 +443,11 @@ fn tick(bot: &Client, s: &Arc<Shared>) {
         {
             let pos = bot.position().map(|p| format!("{:.1} {:.1} {:.1}", p.x, p.y, p.z)).unwrap_or_default();
             let what = crate::damage::take_hits(bot);
+            {
+                let mut hurts = s.hurts.lock();
+                hurts.retain(|x| x.at.elapsed() < HURTS_KEPT);
+                hurts.push(Hurt { at: Instant::now(), lost: was - h, from: what.clone() });
+            }
             warn!(
                 "DAMAGE -{:.1} ({was:.1} -> {h:.1}) from {} at {pos}, {}",
                 was - h,
@@ -440,7 +471,7 @@ fn tick(bot: &Client, s: &Arc<Shared>) {
     if let Some(k) = &s.killaura
         && s.killaura_on.load(Ordering::Relaxed)
     {
-        k.tick(bot, eating);
+        k.tick(bot, eating, None);
     }
 
     // A swarm bot: its orders, controller link and modules.

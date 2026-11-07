@@ -244,10 +244,23 @@ function render() {
     const d = document.createElement('div');
     d.textContent = new Date(f.t).toLocaleTimeString() + '  ' + f.text;
     if (f.kind === 'say') d.className = 'warn';
+    if (f.kind === 'alert') d.className = 'err';
     $('feed').prepend(d);
   }
   while ($('feed').childNodes.length > 200) $('feed').lastChild.remove();
   filled = true;
+}
+
+// The bot's gear at a glance: what is missing in amber.
+function gearLine(b) {
+  const part = (ok, text) => `<span class="${ok ? 'dim' : 'warn'}">${esc(text)}</span>`;
+  const totem = (b.offhand || '').startsWith('totem_of_undying');
+  const armor = (b.armor || []).filter(Boolean).length;
+  return [
+    part(!!b.weapon, b.weapon || 'no weapon'),
+    part(totem, totem ? 'totem' : 'no totem in the offhand' + (b.offhand ? ` (${b.offhand})` : '')),
+    part(armor === 4, `armor ${armor}/4`),
+  ].join(' &middot; ');
 }
 
 function renderBots(bots) {
@@ -255,7 +268,7 @@ function renderBots(bots) {
     const dot = b.online ? 'on' : b.running || b.starting ? 'warn' : 'off';
     const where = b.online ? `${b.x} ${b.y} ${b.z}` : (b.starting ? 'starting...' : b.running ? 'reconnecting...' : 'stopped');
     const hp = b.online ? `${b.health} / ${b.food ?? '-'}` : '';
-    const doing = b.online ? `${esc(b.state)}<div class="dim">${fmt(b.broken)} broken &middot; ${fmt(b.placed)} sealed</div>`
+    const doing = b.online ? `${esc(b.state)}<div class="dim">${fmt(b.broken)} broken &middot; ${fmt(b.placed)} sealed</div><div>${gearLine(b)}</div>`
       : b.elsewhere ? `<span class="warn">running in the ${esc(b.elsewhere)}</span>` : (b.error ? `<span class="err">${esc(b.error)}</span>` : '');
     const btn = b.running || b.starting
       ? `<button onclick="event.stopPropagation();send({type:'stop',name:'${esc(b.name)}'})">Stop</button>`
@@ -290,10 +303,10 @@ function renderSelected(bots) {
   if (!b) return;
   $('sel-name').textContent = b.name;
   $('sel-status').textContent = b.online ? 'online ' + age(b.onlineFor) : b.running ? 'reconnecting' : 'stopped';
-  $('sel-detail').textContent = b.online ? `${b.dim}  ${b.x} ${b.y} ${b.z}  ping ${b.ping}  hunger ${b.hunger}/20  deaths ${b.deaths}  ${b.move}` : (b.error || '');
+  $('sel-detail').textContent = b.online ? `${b.dim}  ${b.x} ${b.y} ${b.z}  ping ${b.ping}  hunger ${b.hunger}/20  deaths ${b.deaths}  tools ${(b.tools || []).join(', ') || 'none'}  weapon ${b.weapon || 'none'}  offhand ${b.offhand || 'empty'}  armor ${(b.armor || []).map(a => a || '-').join(', ')}  ${b.move}` : (b.error || '');
   const base = b.base;
   $('sel-base').innerHTML = base
-    ? `<label>tools</label><span>${pos(base.tools)}</span><label>repair</label><span>${pos(base.repair)}</span><label>food</label><span>${pos(base.food)}</span><label>recorded</label><span class="dim">${new Date(base.when).toLocaleString()} at ${pos(base.at)}</span>`
+    ? `<label>tools</label><span>${(base.all_tools && base.all_tools.length ? base.all_tools : [base.tools]).map(pos).join(' / ')}</span><label>repair</label><span>${(base.all_repair && base.all_repair.length ? base.all_repair : [base.repair]).map(pos).join(' / ')}</span><label>food</label><span>${pos(base.food)}</span><label>recorded</label><span class="dim">${new Date(base.when).toLocaleString()} at ${pos(base.at)}</span>`
     : `<label>base</label><span class="warn">none yet - log it in by the chest signed "${esc(S.job.tools_sign)}", or stand it there and press Record base here</span>`;
   const ss = $('sel-startstop');
   ss.textContent = b.running || b.starting ? 'Stop' : 'Start';

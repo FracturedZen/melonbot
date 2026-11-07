@@ -40,6 +40,52 @@ impl Plugin for ChestsPlugin {
 #[derive(Component, Default)]
 pub struct Signs(pub HashMap<BlockPos, String>);
 
+/// Each sign's lines as written, front then back, empty ones left out - for a sign that must read
+/// exactly something (the mapart's colour chests: "GRAY" is not "LIGHT GRAY"), where Signs' NBT
+/// dump would also match its keys and flags.
+#[derive(Component, Default)]
+pub struct SignLines(pub HashMap<BlockPos, Vec<String>>);
+
+/// A sign's lines from its block entity NBT: front_text then back_text, each a list of 4
+/// messages - a plain string, or a text component (its "text", the "" of a mixed list's wrapper,
+/// and its "extra" after it). A JSON string from an older server is read the same way.
+pub fn sign_lines(nbt: &simdnbt::owned::NbtCompound) -> Vec<String> {
+    fn component(c: &simdnbt::owned::NbtCompound) -> String {
+        let mut out = c.string("text").or_else(|| c.string("")).map(|s| s.to_str().into_owned()).unwrap_or_default();
+        if let Some(extra) = c.list("extra") {
+            out.extend(line_list(extra));
+        }
+        out
+    }
+    fn plain(s: &str) -> String {
+        let t = s.trim();
+        if let Some(inner) = t.strip_prefix('"').and_then(|t| t.strip_suffix('"')) {
+            return inner.to_string();
+        }
+        if t.starts_with('{') {
+            // {"text":"RED"} and its extras: every "text" value, in order.
+            return t.split("\"text\":\"").skip(1).filter_map(|p| p.split('"').next()).collect();
+        }
+        s.to_string()
+    }
+    fn line_list(l: &simdnbt::owned::NbtList) -> Vec<String> {
+        if let Some(strs) = l.strings() {
+            strs.iter().map(|s| plain(&s.to_str())).collect()
+        } else if let Some(cs) = l.compounds() {
+            cs.iter().map(component).collect()
+        } else {
+            Vec::new()
+        }
+    }
+    let mut out = Vec::new();
+    for side in ["front_text", "back_text"] {
+        if let Some(m) = nbt.compound(side).and_then(|t| t.list("messages")) {
+            out.extend(line_list(m).into_iter().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()));
+        }
+    }
+    out
+}
+
 fn is_sign(kind: BlockEntityKind) -> bool {
     matches!(kind, BlockEntityKind::Sign | BlockEntityKind::HangingSign)
 }
@@ -50,11 +96,12 @@ pub struct EnderChests(pub std::collections::HashSet<BlockPos>);
 
 fn record_signs(
     mut events: MessageReader<ReceiveGamePacketEvent>,
-    mut us: Query<(Option<&mut Signs>, Option<&mut EnderChests>), With<LocalEntity>>,
+    mut us: Query<(Option<&mut Signs>, Option<&mut SignLines>, Option<&mut EnderChests>), With<LocalEntity>>,
     mut commands: Commands,
 ) {
     for ev in events.read() {
         let mut found: Vec<(BlockPos, String)> = Vec::new();
+        let mut lines: Vec<(BlockPos, Vec<String>)> = Vec::new();
         let mut enders: Vec<BlockPos> = Vec::new();
         match ev.packet.as_ref() {
             ClientboundGamePacket::LevelChunkWithLight(p) => {
@@ -66,11 +113,13 @@ fn record_signs(
                         enders.push(at);
                     } else if is_sign(be.kind) {
                         found.push((at, format!("{:?}", be.data).to_lowercase()));
+                        lines.push((at, sign_lines(&be.data)));
                     }
                 }
             }
             ClientboundGamePacket::BlockEntityData(p) if is_sign(p.block_entity_type) => {
                 found.push((p.pos, format!("{:?}", p.tag).to_lowercase()));
+                lines.push((p.pos, sign_lines(&p.tag)));
             }
             ClientboundGamePacket::BlockEntityData(p) if p.block_entity_type == BlockEntityKind::EnderChest => enders.push(p.pos),
             _ => continue,
@@ -78,7 +127,15 @@ fn record_signs(
         if found.is_empty() && enders.is_empty() {
             continue;
         }
-        let Ok((signs, ec)) = us.get_mut(ev.entity) else { continue };
+        let Ok((signs, sign_text, ec)) = us.get_mut(ev.entity) else { continue };
+        if !lines.is_empty() {
+            match sign_text {
+                Some(mut s) => s.0.extend(lines),
+                None => {
+                    commands.entity(ev.entity).insert(SignLines(lines.into_iter().collect()));
+                }
+            }
+        }
         if !found.is_empty() {
             match signs {
                 Some(mut s) => s.0.extend(found),
@@ -125,12 +182,18 @@ pub fn container_for_sign(bot: &Client, sign: BlockPos) -> Option<BlockPos> {
 /// The container signed with `word` ("tools", "repair", "food") nearest the base, if its chunk
 /// has been seen.
 pub fn signed(bot: &Client, base: BlockPos, word: &str) -> Option<BlockPos> {
+    signed_all(bot, base, word).into_iter().next()
+}
+
+/// Every container in reach of `base` under a sign containing `word`, nearest first - a base may
+/// have more than one tools or repair chest (6 Nov).
+pub fn signed_all(bot: &Client, base: BlockPos, word: &str) -> Vec<BlockPos> {
     let signs: Vec<(BlockPos, String)> = bot
         .query_self::<Option<&Signs>, _>(|s| s.map(|s| s.0.iter().map(|(p, t)| (*p, t.clone())).collect()))
         .ok()
         .flatten()
         .unwrap_or_default();
-    let mut best: Option<(i64, BlockPos)> = None;
+    let mut found: Vec<(i64, BlockPos)> = Vec::new();
     for (pos, text) in signs {
         if (pos.x - base.x).abs() > REACH || (pos.z - base.z).abs() > REACH || (pos.y - base.y).abs() > REACH_Y {
             continue;
@@ -142,14 +205,23 @@ pub fn signed(bot: &Client, base: BlockPos, word: &str) -> Option<BlockPos> {
         if word == "tools" && text.contains("repair") {
             continue;
         }
-        if let Some(c) = container_for_sign(bot, pos) {
+        if let Some(c) = container_for_sign(bot, pos)
+            && !found.iter().any(|(_, f)| *f == c)
+        {
             let d = (c.x - base.x).pow(2) as i64 + (c.y - base.y).pow(2) as i64 + (c.z - base.z).pow(2) as i64;
-            if best.is_none_or(|(bd, _)| d < bd) {
-                best = Some((d, c));
-            }
+            found.push((d, c));
         }
     }
-    best.map(|(_, c)| c)
+    found.sort_by_key(|(d, c)| (*d, c.x, c.y, c.z));
+    found.into_iter().map(|(_, c)| c).collect()
+}
+
+/// Every sign this bot has seen, by position, with its lines as written.
+pub fn sign_texts(bot: &Client) -> Vec<(BlockPos, Vec<String>)> {
+    bot.query_self::<Option<&SignLines>, _>(|s| s.map(|s| s.0.iter().map(|(p, t)| (*p, t.clone())).collect()))
+        .ok()
+        .flatten()
+        .unwrap_or_default()
 }
 
 /// Every sign text this bot has seen, by position (front and back joined, lower case).
@@ -213,6 +285,12 @@ async fn open(bot: &Client, pos: BlockPos) -> Result<azalea::container::Containe
     }
 }
 
+/// The straight way to each spot is looked at from this near: from farther the trip goes by the
+/// cruise height whatever the spot, and looking stopped the client (6 Nov: 2.5 s with the game tick
+/// held, ~100 spots each sampled every 0.25 blocks over 900 - the perimeter bots picked up the junk
+/// they had just thrown out meanwhile).
+const WAY_CHECKED_WITHIN: f64 = 64.0;
+
 /// Fly to a clear spot within reach of a container; a spot the server will not let us reach is
 /// given up for the next best. Spots the mover can fly to from here without a detour come first
 /// (it flies straight lines, and contained it gives up rather than go round: 30 Oct, the seller
@@ -226,6 +304,7 @@ pub async fn fly_within_reach(bot: &Client, pos: BlockPos) -> Result<(), String>
     if (from + Vec3::new(0.0, 1.62, 0.0)).distance_to(centre) <= 4.0 {
         return Ok(());
     }
+    let near = from.distance_to(centre) <= WAY_CHECKED_WITHIN;
     let mut spots: Vec<(bool, f64, Vec3)> = {
         let world = bot.world().map_err(|e| e.to_string())?;
         let w = world.read();
@@ -237,7 +316,7 @@ pub async fn fly_within_reach(bot: &Client, pos: BlockPos) -> Result<(), String>
                     let eye = feet + Vec3::new(0.0, 1.62, 0.0);
                     let d = eye.distance_to(centre);
                     if d <= 4.0 && movement::geom::stand_clear(&w, feet) {
-                        all.push((!movement::geom::way_clear(&w, from, feet), d, feet));
+                        all.push((near && !movement::geom::way_clear(&w, from, feet), d, feet));
                     }
                 }
             }
@@ -271,18 +350,28 @@ pub async fn fly_within_reach(bot: &Client, pos: BlockPos) -> Result<(), String>
 /// Shift-click the bag stacks `want` picks into the container, `max` stacks at most. Returns the
 /// stacks that left the bags (counted, not assumed).
 pub async fn store(bot: &Client, pos: BlockPos, want: impl Fn(&ItemStack) -> bool, max: usize) -> Result<usize, String> {
-    let before = inv::bags(bot).iter().filter(|(_, s)| !s.is_empty()).count();
+    store_picked(bot, pos, |bags| bags.iter().filter(|(_, s)| want(s)).take(max).map(|(i, _)| *i).collect()).await
+}
+
+/// Shift-click into the container the bag stacks `pick` chooses - given the bags as the chest
+/// shows them, by their bag slot (9-35 main, 36-44 hotbar), it returns the bag slots - so one of
+/// two alike stacks can be chosen (the perimeter's spare tools: 5 Nov). Returns the stacks that
+/// left the bags (counted).
+pub async fn store_picked(bot: &Client, pos: BlockPos, pick: impl FnOnce(&[(usize, ItemStack)]) -> Vec<usize>) -> Result<usize, String> {
     let c = open(bot, pos).await?;
+    let before = filled(bot);
     let menu = c.menu().ok().flatten().ok_or("no menu")?;
     let slots = menu.slots();
-    let picks: Vec<usize> = menu.player_slots_range().filter(|i| want(&slots[*i])).take(max).collect();
+    // The container's player part runs main then hotbar, as the bag slots 9-44 do.
+    let start = *menu.player_slots_range().start();
+    let bags: Vec<(usize, ItemStack)> = menu.player_slots_range().map(|i| (9 + i - start, slots[i].clone())).collect();
+    let picks: Vec<usize> = pick(&bags).into_iter().filter(|b| inv::BAGS.contains(b)).map(|b| start + b - 9).collect();
     debug!(target: "chests", "store at {pos}: {} stack(s) picked", picks.len());
     click_paced(&c, &picks).await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    answered(bot, &c, &picks).await;
     c.close();
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let after = inv::bags(bot).iter().filter(|(_, s)| !s.is_empty()).count();
-    let moved = before.saturating_sub(after);
+    let moved = before.saturating_sub(filled(bot));
     info!(target: "chests", "stored {moved} of {} stack(s) into {pos}", picks.len());
     if moved < picks.len() {
         warn!(target: "chests", "{} stack(s) did not go in - chest full?", picks.len() - moved);
@@ -299,31 +388,98 @@ pub async fn take(
     rank: impl Fn(&ItemStack) -> i64,
     max: usize,
 ) -> Result<usize, String> {
-    let before = inv::bags(bot).iter().filter(|(_, s)| !s.is_empty()).count();
+    take_picked(bot, pos, |slots| {
+        let mut picks: Vec<usize> = (0..slots.len()).filter(|i| want(&slots[*i])).collect();
+        picks.sort_by_key(|i| -rank(&slots[*i]));
+        picks.truncate(max);
+        picks
+    })
+    .await
+}
+
+/// Shift-click into the bags the container slots `pick` chooses - given the container's own slots,
+/// it returns their indexes - as many as there is room for. Returns the stacks that arrived
+/// (counted).
+pub async fn take_picked(bot: &Client, pos: BlockPos, pick: impl FnOnce(&[ItemStack]) -> Vec<usize>) -> Result<usize, String> {
     let c = open(bot, pos).await?;
+    let before = filled(bot);
     let menu = c.menu().ok().flatten().ok_or("no menu")?;
     let slots = menu.slots();
     let first_player = *menu.player_slots_range().start();
-    let mut picks: Vec<usize> = (0..first_player).filter(|i| want(&slots[*i])).collect();
-    picks.sort_by_key(|i| -rank(&slots[*i]));
-    picks.truncate(max.min(inv::empty_slots(bot)));
-    debug!(target: "chests", "take at {pos}: {} stack(s) picked of {} matching", picks.len(), (0..first_player).filter(|i| want(&slots[*i])).count());
+    let mut picks: Vec<usize> = pick(&slots[..first_player]).into_iter().filter(|i| *i < first_player).collect();
+    let wanted = picks.len();
+    picks.truncate(inv::empty_slots(bot));
+    debug!(target: "chests", "take at {pos}: {} stack(s) picked of {wanted} wanted", picks.len());
+    if picks.len() < wanted {
+        info!(target: "chests", "{} stack(s) wanted at {pos}, and no room in the bags for them", wanted - picks.len());
+    }
     click_paced(&c, &picks).await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    answered(bot, &c, &picks).await;
     c.close();
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let after = inv::bags(bot).iter().filter(|(_, s)| !s.is_empty()).count();
-    let got = after.saturating_sub(before);
+    let got = filled(bot).saturating_sub(before);
     info!(target: "chests", "took {got} of {} stack(s) from {pos}", picks.len());
     Ok(got)
+}
+
+/// Take exactly `n` of item `id` - as near as the container holds and the bags have room for -
+/// and nothing over (6 Nov, the mapart bot: "only pull out the carpet it needs from the chests not
+/// extras so it doesnt clutter inventory"). Whole stacks are shift-clicked while a whole one is
+/// still wanted; the last part is split off a stack: picked up, dropped one at a time into a bag
+/// slot, the rest put back. Returns how many arrived (counted).
+pub async fn take_exact(bot: &Client, pos: BlockPos, id: &str, n: i32) -> Result<i32, String> {
+    use azalea::inventory::operations::PickupClick;
+    let c = open(bot, pos).await?;
+    let before = inv::count_id(bot, id);
+    let menu = c.menu().ok().flatten().ok_or("no menu")?;
+    let slots = menu.slots();
+    let player: Vec<usize> = menu.player_slots_range().collect();
+    let first_player = player.first().copied().unwrap_or(slots.len());
+    let mut stacks: Vec<(usize, i32)> = (0..first_player).filter(|i| inv::stack_id(&slots[*i]) == id).map(|i| (i, slots[i].count())).collect();
+    stacks.sort_by_key(|(_, k)| -k);
+    let mut empty: Vec<usize> = player.iter().copied().filter(|i| slots[*i].is_empty()).collect();
+    let (mut left, mut whole, mut rest) = (n, Vec::new(), Vec::new());
+    for (i, k) in stacks {
+        if k <= left && empty.len() > whole.len() + 1 {
+            whole.push(i);
+            left -= k;
+        } else {
+            rest.push((i, k));
+        }
+    }
+    // The part: off the smallest stack that has it, into an empty bag slot.
+    if left > 0
+        && let Some((src, _)) = rest.iter().filter(|(_, k)| *k > left).min_by_key(|(_, k)| *k).copied()
+        && let Some(to) = empty.pop()
+    {
+        debug!(target: "chests", "take at {pos}: {left} {id} split off a stack");
+        c.click(PickupClick::Left { slot: Some(src as u16) });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        for k in 0..left {
+            c.click(PickupClick::Right { slot: Some(to as u16) });
+            if (k as usize + 1) % CLICKS_PER_TICK == 0 {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        c.click(PickupClick::Left { slot: Some(src as u16) });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    click_paced(&c, &whole).await;
+    answered(bot, &c, &whole).await;
+    c.close();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let got = inv::count_id(bot, id) - before;
+    info!(target: "chests", "took {got} of {n} {id} from {pos}");
+    Ok(got.max(0))
 }
 
 /// Take stacks of each item until `needs` (item id -> count) is met or the bags are nearly full,
 /// fullest stacks first; also what the container held when it was opened (item id -> count, less
 /// what was taken) - the swarm printer remembers it so the next bot goes where the items are.
 pub async fn take_amounts(bot: &Client, pos: BlockPos, needs: &HashMap<String, i32>) -> Result<(usize, HashMap<String, i32>), String> {
-    let before = inv::bags(bot).iter().filter(|(_, s)| !s.is_empty()).count();
     let c = open(bot, pos).await?;
+    let before = filled(bot);
     let menu = c.menu().ok().flatten().ok_or("no menu")?;
     let slots = menu.slots();
     let first_player = *menu.player_slots_range().start();
@@ -356,10 +512,36 @@ pub async fn take_amounts(bot: &Client, pos: BlockPos, needs: &HashMap<String, i
     tokio::time::sleep(Duration::from_millis(300)).await;
     c.close();
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let after = inv::bags(bot).iter().filter(|(_, s)| !s.is_empty()).count();
-    let got = after.saturating_sub(before);
+    let got = filled(bot).saturating_sub(before);
     info!(target: "chests", "took {got} of {} stack(s) from {pos}", picks.len());
     Ok((got, contents))
+}
+
+/// Bag slots with something in them. Counted with the container open (its player part is the
+/// server's word) and again after the close: counted before the trip there, the bags were what the
+/// bot last thought - 6 Nov: "took 4 of 0 stack(s)" and "stored 0 of 1" for slots refilled on the
+/// way that the bot still thought empty.
+fn filled(bot: &Client) -> usize {
+    inv::bags(bot).iter().filter(|(_, s)| !s.is_empty()).count()
+}
+
+/// The chest stays open after the clicks until the server has had its say: at least a round trip
+/// (the server writes only when the client's guess at a click was wrong), then until every clicked
+/// slot is empty, 2 s at most. azalea drops the server's word on a chest already closed, so a close
+/// before it came left the bags showing what had gone (5 Nov: "1 stack(s) did not go in" for 44 of
+/// the perimeter's worn tools, closed 300 ms after the click, on a lagging server - and the next
+/// trip did not find them in the bags).
+async fn answered(bot: &Client, c: &azalea::container::ContainerHandle, picks: &[usize]) {
+    let ping = bot.tab_list().ok().and_then(|t| t.get(&bot.uuid()).map(|i| i.latency)).unwrap_or(150).clamp(0, 1000) as u64;
+    tokio::time::sleep(Duration::from_millis((2 * ping + 150).max(300))).await;
+    let start = std::time::Instant::now();
+    while start.elapsed() < Duration::from_secs(2) {
+        let done = c.menu().ok().flatten().is_some_and(|m| picks.iter().all(|i| m.slots().get(*i).is_none_or(|s| s.is_empty())));
+        if done {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 async fn click_paced(c: &azalea::container::ContainerHandle, slots: &[usize]) {

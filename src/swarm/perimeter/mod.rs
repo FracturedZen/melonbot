@@ -30,6 +30,7 @@
 pub mod base;
 pub mod control;
 pub mod dig;
+pub mod guard;
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -585,6 +586,24 @@ pub struct Base {
     /// Where it stood when it saw them.
     pub at: crate::config::Pos,
     pub when: u64,
+    /// Every chest signed for tools and for repair there, nearest first (the first is `tools` /
+    /// `repair`): one without what is wanted, or full, is passed over for the next (6 Nov: the
+    /// user can add more of either).
+    #[serde(default)]
+    pub all_tools: Vec<crate::config::Pos>,
+    #[serde(default)]
+    pub all_repair: Vec<crate::config::Pos>,
+}
+
+impl Base {
+    /// The tools chests to try, in order (a base recorded before 6 Nov has only the one).
+    pub fn tools_chests(&self) -> Vec<crate::config::Pos> {
+        if self.all_tools.is_empty() { vec![self.tools] } else { self.all_tools.clone() }
+    }
+
+    pub fn repair_chests(&self) -> Vec<crate::config::Pos> {
+        if self.all_repair.is_empty() { self.repair.into_iter().collect() } else { self.all_repair.clone() }
+    }
 }
 
 pub struct Perimeter {
@@ -696,7 +715,11 @@ pub fn tick(bot: &Client, s: &Arc<Shared>, ctx: &Arc<SwarmCtx>, p: &Arc<Perimete
             _ => super::tick::bot_command(bot, ctx, &c),
         }
     }
-    let eating = super::tick::modules_tick(bot, ctx, link, ticks);
+    // Staying alive first: a bot logging itself out does nothing else.
+    if guard::tick(bot, s, ctx, link, ticks) {
+        return;
+    }
+    let (eating, fighting) = super::tick::modules_tick(bot, ctx, link, ticks);
     if ticks.is_multiple_of(20) {
         movement::set_max_bps(bot, ctx.cfg.read().max_speed);
     }
@@ -704,8 +727,10 @@ pub fn tick(bot: &Client, s: &Arc<Shared>, ctx: &Arc<SwarmCtx>, p: &Arc<Perimete
     if ticks.is_multiple_of(40) {
         base::record(bot, ctx, p, &link.name, false);
     }
+    // Its respawn at the bed, once a join - before it is off to dig.
+    base::bed_check(bot, link);
     if ticks.is_multiple_of(40) && !link.errand_running() {
-        super::tick::food_check(bot, ctx, link);
+        base::food_errand(bot, ctx, p, link);
     }
     super::tick::recover_after_death(bot, link, ticks);
 
@@ -715,6 +740,10 @@ pub fn tick(bot: &Client, s: &Arc<Shared>, ctx: &Arc<SwarmCtx>, p: &Arc<Perimete
         e
     } else if eating {
         "eating".to_string()
+    } else if fighting {
+        "fighting".to_string()
+    } else if base::bed_pending(link) {
+        "looking for its bed".to_string()
     } else {
         match dig::tick(bot, ctx, p, link, ticks) {
             dig::Want::Tools => base::tools_errand(bot, ctx, p, link),
@@ -751,6 +780,26 @@ fn row(bot: &Client, s: &Shared, link: &BotLink, state: &str) -> Value {
         o["ping"] = json!(bot.tab_list().ok().and_then(|t| t.get(&bot.uuid()).map(|i| i.latency)).unwrap_or(-1));
     }
     o["food"] = json!(link.mods.lock().autoeat.as_ref().map(|a| a.food_points(bot)));
+    // The tools it carries, with their uses left: one of each kind is all it should have.
+    let tools: Vec<String> = crate::inv::bags(bot)
+        .iter()
+        .filter(|(_, st)| super::errand::is_digging_tool(st))
+        .map(|(_, st)| format!("{} {}", crate::inv::stack_id(st), crate::inv::uses_left(st).unwrap_or(0)))
+        .collect();
+    o["tools"] = json!(tools);
+    // Its gear: the weapon kill-aura uses, the offhand (the totem), the armor - "id uses-left".
+    let named = |st: &azalea::inventory::ItemStack| {
+        (!st.is_empty()).then(|| match crate::inv::uses_left(st) {
+            Some(u) => format!("{} {u}", crate::inv::stack_id(st)),
+            None => crate::inv::stack_id(st).to_string(),
+        })
+    };
+    let worn = crate::inv::menu(bot).map(|m| m.slots()).unwrap_or_default();
+    let worn = |i: usize| worn.get(i).and_then(named);
+    let weapon = crate::inv::bags(bot).into_iter().filter_map(|(_, st)| crate::modules::killaura::weapon_rank(&st).map(|r| (r, st))).max_by_key(|(r, _)| *r);
+    o["weapon"] = json!(weapon.and_then(|(_, st)| named(&st)));
+    o["offhand"] = json!(worn(45));
+    o["armor"] = json!([5, 6, 7, 8].map(worn));
     o
 }
 

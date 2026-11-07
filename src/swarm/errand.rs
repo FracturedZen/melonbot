@@ -217,7 +217,8 @@ pub async fn fetch_food(bot: Client, ctx: Arc<SwarmCtx>, source: FoodSource, rul
     )
     .await?;
     if got == 0 {
-        return Err(format!("the food chest at {} {} {} had nothing to eat (or the bags are full)", chest.x, chest.y, chest.z));
+        let why = if inv::empty_slots(&bot) == 0 { "the bags are full" } else { "it had nothing to eat" };
+        return Err(format!("nothing taken from the food chest at {} {} {} - {why}", chest.x, chest.y, chest.z));
     }
     Ok(format!("took {got} stack(s) of food"))
 }

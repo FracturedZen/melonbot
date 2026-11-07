@@ -21,7 +21,7 @@ use super::{
 };
 use crate::{
     bot::Shared,
-    modules::{ModuleConfig, autoeat::AutoEat, killaura::KillAura},
+    modules::{ModuleConfig, autoeat::AutoEat, killaura::{self, KillAura}},
     movement,
 };
 
@@ -49,7 +49,7 @@ pub fn tick(bot: &Client, s: &Arc<Shared>, link: &Arc<BotLink>, ticks: u64) {
         on_controller(bot, ctx, link, controller::parse(&line));
     }
 
-    let eating = modules_tick(bot, ctx, link, ticks);
+    let (eating, _) = modules_tick(bot, ctx, link, ticks);
 
     if ticks.is_multiple_of(10) {
         record_sightings(bot, ctx, link);
@@ -150,7 +150,8 @@ fn on(b: bool) -> &'static str {
 
 /// The modules, rebuilt when their settings changed, then auto-eat and kill-aura's tick. True
 /// while a meal has the hand.
-pub(super) fn modules_tick(bot: &Client, ctx: &SwarmCtx, link: &BotLink, ticks: u64) -> bool {
+/// The modules' tick: (a meal has the hand, kill-aura has the hand).
+pub(super) fn modules_tick(bot: &Client, ctx: &SwarmCtx, link: &BotLink, ticks: u64) -> (bool, bool) {
     {
         let mut m = link.mods.lock();
         if m.dirty {
@@ -182,10 +183,13 @@ pub(super) fn modules_tick(bot: &Client, ctx: &SwarmCtx, link: &BotLink, ticks: 
             None => false,
         }
     };
-    if let Some(k) = &link.mods.lock().killaura {
-        k.tick(bot, eating);
-    }
-    eating
+    // A perimeter bot strikes inside its box only.
+    let bounds = ctx.perimeter.as_ref().map(|p| {
+        let j = p.job.read();
+        killaura::Bounds { min_x: j.x1.min(j.x2) as f64, min_z: j.z1.min(j.z2) as f64, max_x: (j.x1.max(j.x2) + 1) as f64, max_z: (j.z1.max(j.z2) + 1) as f64 }
+    });
+    let fighting = link.mods.lock().killaura.as_ref().is_some_and(|k| k.tick(bot, eating, bounds));
+    (eating, fighting)
 }
 
 /// Back from the dead: its items lie where it died for 5 minutes - go and get them.
@@ -515,26 +519,35 @@ fn row(bot: &Client, s: &Shared, link: &BotLink, order: &Stamped, state: &str) -
 /// Low on food and a food source known: fetch some (not more often than every 2 minutes, so an
 /// empty chest is not visited every few seconds).
 pub(super) fn food_check(bot: &Client, ctx: &Arc<SwarmCtx>, link: &Arc<BotLink>) {
+    if let Some((source, rule)) = food_due(bot, ctx, link) {
+        link.start_errand("fetching food", errand::fetch_food(bot.clone(), ctx.clone(), source, rule, 1));
+    }
+}
+
+/// Low on food, none in the linked ender chest, and a food chest known: where to fetch it from
+/// (and what auto-eat eats) - at most every 2 minutes.
+pub(super) fn food_due(bot: &Client, ctx: &Arc<SwarmCtx>, link: &Arc<BotLink>) -> Option<(errand::FoodSource, crate::modules::autoeat::FoodRule)> {
     let (points, rule) = {
         let m = link.mods.lock();
-        let Some(ae) = &m.autoeat else { return };
+        let ae = m.autoeat.as_ref()?;
         (ae.food_points(bot), ae.rule())
     };
     if points >= ctx.cfg.read().food_low_points {
-        return;
+        return None;
     }
     // From the linked ender chest first: no trip, and the link stays.
     if eclink::take_food(bot, link, &rule) {
-        return;
+        return None;
     }
     if link.food_retry_at.lock().is_some_and(|t| Instant::now() < t) {
-        return;
+        return None;
     }
     *link.food_retry_at.lock() = Some(Instant::now() + Duration::from_secs(120));
-    match errand::food_source(bot, ctx) {
-        Some(source) => link.start_errand("fetching food", errand::fetch_food(bot.clone(), ctx.clone(), source, rule, 1)),
-        None => ctx.warn_once(&format!("{} is low on food and no food chest is set or signed - it eats what it carries", link.name)),
+    let source = errand::food_source(bot, ctx);
+    if source.is_none() {
+        ctx.warn_once(&format!("{} is low on food and no food chest is set or signed - it eats what it carries", link.name));
     }
+    source.map(|s| (s, rule))
 }
 
 /// The nuker is hand-breaking hard blocks: a tools chest nearby, if there is one.

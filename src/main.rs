@@ -8,6 +8,7 @@
 //! cache, and logs/.
 
 mod board;
+mod border;
 mod bot;
 mod buyer;
 mod chests;
@@ -19,6 +20,7 @@ mod debuglog;
 mod discord;
 mod entities;
 mod inv;
+mod mapart;
 mod modules;
 mod movement;
 mod panel;
@@ -286,6 +288,10 @@ async fn run(dir: &Path, script: Option<String>, no_routine: bool) -> Result<Exi
     let mut cfg = Config::load(dir)?;
     let _log_guard = init_logging(dir, false)?;
     std::thread::spawn(deadlock_watch);
+    // The mapart bot's Discord side takes maps from the start - signed into Minecraft or not.
+    if cfg.is_mapart() {
+        mapart::start(dir, &cfg);
+    }
     if cfg.account.is_empty() {
         cfg.account = first_sign_in(dir).await?;
     }
@@ -315,7 +321,7 @@ async fn run(dir: &Path, script: Option<String>, no_routine: bool) -> Result<Exi
     let exit = ClientBuilder::new()
         .set_handler(bot::handle)
         .set_state(state.clone())
-        .add_plugins((movement::MovementPlugin, damage::DamagePlugin, chests::ChestsPlugin, board::BoardPlugin, trade::TradePlugin))
+        .add_plugins((movement::MovementPlugin, damage::DamagePlugin, chests::ChestsPlugin, board::BoardPlugin, trade::TradePlugin, border::BorderPlugin))
         .reconnect_after(Duration::from_secs(30))
         .start(account, server.as_str())
         .await;

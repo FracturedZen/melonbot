@@ -72,7 +72,7 @@ impl tracing::field::Visit for NameField {
 /// The explicit targets our modules log under (one file each).
 pub const MODULE_TARGETS: &[&str] = &[
     "goto", "auto-eat", "melon-farmer", "chat", "script", "damage", "discord", "routine", "chests", "printer", "kill-aura", "inventory", "panel",
-    "swarm", "controller", "accounts", "nuker", "combat", "perimeter", "seller", "buyer", "trade",
+    "swarm", "controller", "accounts", "nuker", "combat", "perimeter", "seller", "buyer", "trade", "mapart",
 ];
 
 /// Our own events: melonbot::* and the module targets - never azalea's or a library's.

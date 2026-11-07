@@ -20,6 +20,7 @@ use azalea::{
     BlockPos, Client, Vec3,
     ecs::entity::Entity,
     entity::Dead,
+    inventory::ItemStack,
     registry::builtin::{EntityKind, VillagerProfession},
 };
 use serde_json::{Value, json};
@@ -33,6 +34,9 @@ use crate::{
     trade::{self, Good},
 };
 
+/// Strays are thrown from this far inside the box's side, facing out and a little up.
+const THROW_INSET: f64 = 1.0;
+const THROW_PITCH: f32 = -30.0;
 /// Deposit emeralds once at least this many are carried (~a stack).
 const DEPOSIT_AT: i32 = 64;
 /// How long to idle before looking again when there is nothing to sell.
@@ -238,6 +242,7 @@ pub async fn run(bot: Client, ctx: Arc<Shared>) {
     let mut resting: HashMap<Good, Instant> = HashMap::new();
     while !ctx.quit.load(Ordering::SeqCst) && in_world(&bot) {
         let Some((area, home)) = enter_pen(&ctx, &bot).await else { continue };
+        throw_strays(&ctx, &bot, &area).await;
 
         // Bank emeralds once a stack has built up.
         if inv::count_id(&bot, "emerald") >= DEPOSIT_AT {
@@ -621,6 +626,67 @@ async fn ensure_food(ctx: &Shared, bot: &Client, area: &Area) {
     }
 }
 
+// --------------------------------------------------------------------- strays
+
+/// What the seller keeps: its goods, emeralds, and the food it eats (thrown out, that would only be
+/// fetched again from the food chest).
+fn keeps(ctx: &Shared, goods: &[Good], s: &ItemStack) -> bool {
+    let id = inv::stack_id(s);
+    id == "emerald" || goods.iter().any(|g| g.id() == id) || ctx.autoeat.as_ref().is_some_and(|ae| ae.edible(s))
+}
+
+/// Anything else carried - picked up off the floor (4 Nov: 18 stacks of arrows had filled the bags,
+/// leaving room for 3 of sticks) - is thrown out of the pen over its nearest side, to land a few
+/// blocks past it. The bot never leaves the box, so it never walks over them again.
+async fn throw_strays(ctx: &Shared, bot: &Client, area: &Area) {
+    let goods = goods(ctx);
+    let strays: Vec<(usize, ItemStack)> = inv::bags(bot).into_iter().filter(|(_, s)| !s.is_empty() && !keeps(ctx, &goods, s)).collect();
+    if strays.is_empty() {
+        return;
+    }
+    let Ok(p) = bot.position() else { return };
+    set_phase(ctx, "throwing out what it does not sell");
+    let (spot, yaw) = throw_spot(area, p);
+    if p.distance_to(spot) > 0.5
+        && let Err(e) = movement::fly_to(bot, spot, "throw-out").await
+    {
+        warn!(target: "seller", "could not get to the side of the box to throw out ({e}) - throwing from here");
+    }
+    movement::stop(bot);
+    let _ = bot.set_direction(yaw, THROW_PITCH);
+    // The turn reaches the server with the next tick's movement packet: a throw goes where it faces.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let mut thrown = Vec::new();
+    for (slot, s) in strays {
+        if interrupted(ctx, bot) {
+            break;
+        }
+        let _ = bot.set_direction(yaw, THROW_PITCH);
+        if inv::throw(bot, slot) {
+            thrown.push(format!("{} {}", s.count(), inv::stack_id(&s).replace('_', " ")));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    if !thrown.is_empty() {
+        info!(target: "seller", "threw out of the pen: {}", thrown.join(", "));
+    }
+}
+
+/// Where to throw from, and the way to face (yaw): just inside the side of the box nearest `p`,
+/// facing out. Minecraft's yaw: 0 faces +z (south), 90 faces -x (west).
+fn throw_spot(area: &Area, p: Vec3) -> (Vec3, f32) {
+    let (x0, x1, z0, z1) = (area.min.x as f64, area.max.x as f64 + 1.0, area.min.z as f64, area.max.z as f64 + 1.0);
+    // (how far, which way is out)
+    let sides: [(f64, f64, f64); 4] = [(p.x - x0, -1.0, 0.0), (x1 - p.x, 1.0, 0.0), (p.z - z0, 0.0, -1.0), (z1 - p.z, 0.0, 1.0)];
+    let (_, ox, oz) = sides.into_iter().min_by(|a, b| a.0.total_cmp(&b.0)).unwrap_or((0.0, 0.0, 1.0));
+    let spot = Vec3::new(
+        if ox < 0.0 { x0 + THROW_INSET } else if ox > 0.0 { x1 - THROW_INSET } else { p.x },
+        p.y,
+        if oz < 0.0 { z0 + THROW_INSET } else if oz > 0.0 { z1 - THROW_INSET } else { p.z },
+    );
+    (spot, (-ox).atan2(oz).to_degrees() as f32)
+}
+
 // --------------------------------------------------------------------- the panel's Sell tab
 
 /// The Sell tab: the sell list as the seller reads it - each entry, the chest it comes from and how
@@ -700,4 +766,28 @@ pub fn panel_cmd(ctx: &Shared, cmd: &Value) -> String {
     }
     info!(target: "seller", "sell list: {note}");
     note
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strays_go_out_over_the_nearest_side() {
+        let area = Area { min: Pos { x: 0, y: 60, z: 0 }, max: Pos { x: 9, y: 70, z: 9 } };
+        let at = |x, z| throw_spot(&area, Vec3::new(x, 64.0, z));
+        let near = |a: f32, b: f32| (a - b).abs() < 0.01 || (a - b).abs() > 359.99;
+        let (s, yaw) = at(1.5, 5.0);
+        assert_eq!((s.x, s.z), (1.0, 5.0));
+        assert!(near(yaw, 90.0), "west: {yaw}");
+        let (s, yaw) = at(9.5, 5.0);
+        assert_eq!((s.x, s.z), (9.0, 5.0));
+        assert!(near(yaw, -90.0), "east: {yaw}");
+        let (s, yaw) = at(5.0, 0.4);
+        assert_eq!((s.x, s.z), (5.0, 1.0));
+        assert!(near(yaw, 180.0), "north: {yaw}");
+        let (s, yaw) = at(5.0, 9.2);
+        assert_eq!((s.x, s.z), (5.0, 9.0));
+        assert!(near(yaw, 0.0), "south: {yaw}");
+    }
 }

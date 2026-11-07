@@ -7,7 +7,7 @@ use azalea::{
     inventory::{
         ItemStack, Menu,
         components::{Damage, Enchantments, MaxDamage, StoredEnchantments},
-        operations::ClickType,
+        operations::{ClickType, ThrowClick},
     },
     protocol::packets::game::s_container_click::{HashedStack, ServerboundContainerClick},
     registry::builtin::ItemKind,
@@ -153,6 +153,20 @@ pub fn empty_slots(bot: &Client) -> usize {
     bags(bot).iter().filter(|(_, s)| s.is_empty()).count()
 }
 
+/// Throw a bag stack out (ctrl+Q), the way the bot faces. Not while a container is open.
+pub fn throw(bot: &Client, slot: usize) -> bool {
+    if bot.query_self::<&Inventory, _>(|i| i.id).ok() != Some(0) {
+        return false;
+    }
+    match bot.get_inventory() {
+        Ok(menu) => {
+            menu.click(ThrowClick::All { slot: slot as u16 });
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 /// The stack in the hand right now (the selected hotbar slot), if it can be read.
 pub fn held(bot: &Client) -> Option<ItemStack> {
     let h = bot.selected_hotbar_slot().ok()? as usize;
@@ -212,7 +226,13 @@ pub fn stored_enchant_level(bot: &Client, st: &ItemStack, name: &str) -> i32 {
 }
 
 /// Is this hotbar stack something we must not swap out from under (a tool or weapon)?
-fn is_tool(st: &ItemStack) -> bool {
+/// No container is open: the bags are clicked in the player's own menu.
+pub fn no_container_open(bot: &Client) -> bool {
+    bot.query_self::<&Inventory, _>(|i| i.id).ok() == Some(0)
+}
+
+/// Anything that wears out (tools, weapons, armour).
+pub fn is_tool(st: &ItemStack) -> bool {
     !st.is_empty() && st.get_component::<MaxDamage>().is_some()
 }
 

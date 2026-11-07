@@ -35,7 +35,10 @@ use azalea::{
         common::movements::MoveFlags,
         packets::{
             Packet,
-            game::{ServerboundGamePacket, ServerboundMovePlayerPos, ServerboundMovePlayerRot, ServerboundMovePlayerStatusOnly},
+            game::{
+                ServerboundAttack, ServerboundGamePacket, ServerboundMovePlayerPos, ServerboundMovePlayerRot, ServerboundMovePlayerStatusOnly, ServerboundSwing,
+                s_interact::InteractionHand,
+            },
         },
     },
 };
@@ -115,6 +118,28 @@ pub struct Mover {
     refused: Vec<(Vec3, std::time::Instant)>,
     /// Columns whose clip up the server refused: trips step aside round them.
     refused_clips: trip::RefusedClips,
+    /// A mace strike to make at the start of the next tick (kill-aura).
+    strike: Option<Strike>,
+    /// Strikes made.
+    pub strikes: u32,
+}
+
+/// A mace strike (kill-aura, 5 Nov: "instant pop the mobs while taking no damage"): in one tick,
+/// up or down to `top` over where the bot is, across, and down onto `spot` by a mob claiming
+/// off-ground - so the server counts the drop as a fall and the mace hits as a smash, its damage
+/// growing with the fall - the attack, and back the same way claiming on-ground. A smash that
+/// lands clears the fall; one that misses is billed as fall damage on the way back, so the
+/// caller keeps the drop small enough to live through.
+#[derive(Clone, Debug)]
+pub struct Strike {
+    pub entity: i32,
+    pub spot: Vec3,
+    pub top: f64,
+}
+
+/// The legs of a strike from `here`: up (or down) to `top`, across, down onto the spot.
+pub fn strike_legs(here: Vec3, s: &Strike) -> [Vec3; 3] {
+    [Vec3::new(here.x, s.top, here.z), Vec3::new(s.spot.x, s.top, s.spot.z), s.spot]
 }
 
 /// Pulled back to one spot this often within 5 s: give the trip up (16 Oct: at 5, with the farmer
@@ -310,6 +335,19 @@ fn flight_tick(
             continue;
         }
         let hold = *m.hold.get_or_insert(here);
+        if let Some(s) = m.strike.take() {
+            let world = holder.shared.read();
+            let legs = strike_legs(here, &s);
+            let clear = geom::path_clear(&world, here, legs[0]) && geom::path_clear(&world, legs[0], legs[1]) && geom::path_clear(&world, legs[1], legs[2]);
+            drop(world);
+            if !clear {
+                debug!(target: "goto", "strike on {} dropped: the way is not clear from {}", s.entity, fmt(here));
+            } else if !m.budget.can_afford(40) {
+                debug!(target: "goto", "strike on {} dropped: packet-rate limit near", s.entity);
+            } else {
+                strike_now(&mut m, &mut conn, here, &s, legs);
+            }
+        }
 
         // Where to be at the end of this tick.
         let target = match m.trip.as_mut() {
@@ -381,6 +419,35 @@ fn flight_tick(
             physics.set_on_ground(true);
         }
     }
+}
+
+/// Make a strike (see [`Strike`]) - every leg bought from the tick's start, as a trip's hop is -
+/// ending back at `here`, where the rest of the tick carries on from.
+fn strike_now(m: &mut Mover, conn: &mut RawConnection, here: Vec3, s: &Strike, legs: [Vec3; 3]) {
+    let mut from = here;
+    // Off-ground only for the drop onto the mob: that is the fall the smash is made of.
+    for (i, to) in legs.into_iter().enumerate() {
+        strike_hop(m, conn, from, to, i < 2);
+        from = to;
+    }
+    send(conn, &mut m.budget, ServerboundAttack { entity_id: azalea::core::entity_id::MinecraftEntityId(s.entity) }.into_variant(), false);
+    send(conn, &mut m.budget, ServerboundSwing { hand: InteractionHand::MainHand }.into_variant(), false);
+    for to in [legs[1], legs[0], here] {
+        strike_hop(m, conn, from, to, true);
+        from = to;
+    }
+    m.strikes += 1;
+    m.last_bought_tick = m.ticks;
+    m.last_hop = Some((legs[0], here));
+    debug!(target: "goto", "strike on {}: {} -> y={:.1} -> {} ({:.1}-block drop) and back", s.entity, fmt(here), s.top, fmt(s.spot), s.top - s.spot.y);
+}
+
+fn strike_hop(m: &mut Mover, conn: &mut RawConnection, from: Vec3, to: Vec3, on_ground: bool) {
+    let flags = grounded(on_ground);
+    for _ in 0..m.budget.charge_to(from, to) {
+        send(conn, &mut m.budget, ServerboundMovePlayerStatusOnly { flags }.into_variant(), true);
+    }
+    send(conn, &mut m.budget, ServerboundMovePlayerPos { pos: to, flags }.into_variant(), true);
 }
 
 /// "up", "down", or a compass heading (north = -z), for the log.
@@ -515,6 +582,17 @@ pub fn set_max_bps(bot: &Client, v: f64) {
     });
 }
 
+/// Top trip speed, and the speed now: at it from the first hop, not grown into 10% every 3 s from
+/// whatever the last trip ended at (6 Nov: the mapart bot laying carpet hop by hop).
+pub fn set_speed(bot: &Client, v: f64) {
+    // Up to a hop of STEP_ALWAYS_LEGAL a tick.
+    let v = v.clamp(1.0, budget::STEP_ALWAYS_LEGAL * 20.0);
+    let _ = bot.query_self::<&mut Mover, _>(|mut m| {
+        m.settings.max_bps = v;
+        m.bps = v;
+    });
+}
+
 /// Keep every trip inside a flat, roofed box: no cruise climb to the sky, no clipping or backing
 /// off UPWARD to escape an obstacle - go around at this height instead, or give the trip up. The
 /// seller sets this once; it is what stops a short hop to a nearby chest turning into a launch over
@@ -523,7 +601,26 @@ pub fn set_contained(bot: &Client, on: bool) {
     let _ = bot.query_self::<&mut Mover, _>(|mut m| m.settings.contained = on);
 }
 
+/// A mace strike at the start of the next tick (kill-aura). False when one is already waiting, or
+/// the bot is not flying.
+pub fn strike(bot: &Client, s: Strike) -> bool {
+    bot.query_self::<&mut Mover, _>(|mut m| {
+        if m.strike.is_some() || !m.settings.flight {
+            return false;
+        }
+        m.strike = Some(s);
+        true
+    })
+    .unwrap_or(false)
+}
+
 /// A trip is running.
+/// Room under the server's packet limiter for `n` more packets of any kind (breaks, clicks): the
+/// mover counts every packet sent.
+pub fn packet_room(bot: &Client, n: u32) -> bool {
+    bot.query_self::<&mut Mover, _>(|mut m| m.budget.can_afford(n)).unwrap_or(true)
+}
+
 pub fn busy(bot: &Client) -> bool {
     bot.query_self::<&Mover, _>(|m| m.trip.is_some()).unwrap_or(false)
 }

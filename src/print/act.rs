@@ -13,7 +13,7 @@ use azalea::{
     entity::LookDirection,
     interact::BlockStatePredictionHandler,
     protocol::packets::game::{
-        ServerboundGamePacket, ServerboundPlayerInput,
+        ServerboundGamePacket, ServerboundPlayerInput, ServerboundSetCarriedItem,
         s_interact::InteractionHand,
         s_use_item::ServerboundUseItem,
         s_use_item_on::{BlockHit, ServerboundUseItemOn},
@@ -25,7 +25,7 @@ use super::place::{Choice, Dir};
 use crate::movement;
 
 /// A packet straight onto the connection, after whatever was written before it.
-fn write(bot: &Client, p: ServerboundGamePacket) {
+pub(crate) fn write(bot: &Client, p: ServerboundGamePacket) {
     let _ = bot.query_self::<&mut RawConnection, _>(|mut c| {
         let _ = c.write(p);
     });
@@ -56,6 +56,39 @@ pub fn click(bot: &Client, c: &Choice) {
     if c.click.sneak {
         sneak(bot, false);
     }
+}
+
+/// The click from hotbar slot `h` in the main hand, the offhand left alone (the perimeter's totem
+/// lives there): the hand goes to `h`, the click, and the hand back - all straight onto the
+/// connection, in that order, so azalea's own idea of the held slot is right again after.
+pub fn click_from_hotbar(bot: &Client, h: u8, c: &Choice) {
+    let held = bot.selected_hotbar_slot().unwrap_or(0);
+    if c.needs_look {
+        movement::look_now(bot, c.click.yaw, c.click.pitch);
+    }
+    if held != h {
+        write(bot, ServerboundSetCarriedItem { slot: h as u16 }.into_variant());
+    }
+    use_item_on(bot, InteractionHand::MainHand, c.click.clicked, c.click.face, c.click.hit);
+    if held != h {
+        write(bot, ServerboundSetCarriedItem { slot: held as u16 }.into_variant());
+    }
+}
+
+/// Right-clicks on the tops of blocks from hotbar slot `h` in the main hand, sneaking - the mapart's
+/// carpets, laid on a platform with dispensers in it: sneaking, a dispenser (or a chest) under the
+/// click is placed on, never opened. All straight onto the connection, in order: the hand, the
+/// sneak, the clicks, the sneak let go. The hand stays on `h`.
+pub fn place_on_tops_sneaking(bot: &Client, h: u8, tops: &[(BlockPos, Vec3)]) {
+    if bot.selected_hotbar_slot().ok() != Some(h) {
+        bot.set_selected_hotbar_slot(h);
+    }
+    write(bot, ServerboundSetCarriedItem { slot: h as u16 }.into_variant());
+    sneak(bot, true);
+    for (pos, hit) in tops {
+        use_item_on(bot, InteractionHand::MainHand, *pos, Dir::Up, *hit);
+    }
+    sneak(bot, false);
 }
 
 /// A main-hand right click on a block's face (its own use: a state fix, a hoe or shovel).

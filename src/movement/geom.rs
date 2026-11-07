@@ -202,6 +202,11 @@ pub fn describe_column(world: &World, at: Vec3, top_y: f64) -> String {
     if out.is_empty() { "all air".into() } else { out.join(", ") }
 }
 
+/// Standing on something: the box a twentieth of a block lower runs into a block.
+pub fn supported(world: &World, feet: Vec3) -> bool {
+    !stand_clear(world, Vec3::new(feet.x, feet.y - 0.05, feet.z))
+}
+
 /// How far straight down is clear, in 0.1 steps, up to `max_down`.
 pub fn clear_down(world: &World, from: Vec3, max_down: f64) -> f64 {
     let mut last = 0.0;

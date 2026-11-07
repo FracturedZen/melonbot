@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use azalea::{Vec3, world::World};
+use azalea::{BlockPos, Vec3, core::position::ChunkPos, world::World};
 
 use super::{
     budget::{Budget, STEP_ALWAYS_LEGAL},
@@ -18,8 +18,14 @@ use super::{
 };
 
 pub const CRUISE_Y: f64 = 330.0;
-/// Trips shorter than this go straight, not via the cruise height.
+/// With nothing known of the way (not loaded here), trips shorter than this go straight, not via
+/// the cruise height.
 const CRUISE_MIN_DISTANCE: f64 = 48.0;
+/// Air kept under its feet the whole way across a low route: this client may see the ground a
+/// little higher or lower than the server has it.
+const LOW_ROUTE_MARGIN: f64 = 2.0;
+/// How far apart the way's chunks are looked at to see that all of it is loaded here.
+const LOADED_STEP: f64 = 8.0;
 const ARRIVE_DIST: f64 = 1.25;
 /// Down per tick when sinking onto a target (FlightMover.MAX_SAFE_DOWN).
 pub const MAX_SAFE_DOWN: f64 = 2.25;
@@ -139,6 +145,49 @@ fn horiz(a: Vec3, b: Vec3) -> f64 {
     ((a.x - b.x).powi(2) + (a.z - b.z).powi(2)).sqrt()
 }
 
+/// Every chunk under the line from `a` to `b` is loaded here (an unloaded one reads as open air).
+fn loaded_between(world: &World, a: Vec3, b: Vec3) -> bool {
+    let n = ((horiz(a, b) / LOADED_STEP).ceil() as i32).max(1);
+    (0..=n).all(|i| {
+        let p = a + (b - a) * (i as f64 / n as f64);
+        world.chunks.get(&ChunkPos::from(BlockPos::new(p.x.floor() as i32, 0, p.z.floor() as i32))).is_some()
+    })
+}
+
+/// The lowest height to fly from `from` to `to` at - straight up, across, straight down - with
+/// all three clear, and LOW_ROUTE_MARGIN of air under the way across when there is room for it;
+/// None when nothing under the cruise height is. Doubling up from the higher end, then halving
+/// back down to the block: a dozen looks, not one a block.
+fn lowest_over(world: &World, from: Vec3, to: Vec3) -> Option<f64> {
+    let base = from.y.max(to.y);
+    let clear = |y: f64| {
+        let (up, over) = (Vec3::new(from.x, y, from.z), Vec3::new(to.x, y, to.z));
+        geom::path_clear(world, from, up) && geom::path_clear(world, up, over) && geom::path_clear(world, over, to)
+    };
+    let y = if clear(base) {
+        base
+    } else {
+        let (mut lo, mut hi) = (0.0, 2.0);
+        while !clear(base + hi) {
+            lo = hi;
+            hi *= 2.0;
+            if base + hi >= CRUISE_Y {
+                return None;
+            }
+        }
+        while hi - lo > 1.0 {
+            let mid = ((lo + hi) / 2.0_f64).round();
+            if mid <= lo || mid >= hi {
+                break;
+            }
+            if clear(base + mid) { hi = mid } else { lo = mid }
+        }
+        base + hi
+    };
+    let higher = y + LOW_ROUTE_MARGIN;
+    Some(if higher < CRUISE_Y && clear(higher) { higher } else { y })
+}
+
 /// What one tick of a trip wants done.
 #[derive(Debug)]
 pub enum Step {
@@ -196,6 +245,8 @@ pub struct Trip {
     contained: bool,
     /// How close counts as there on the last leg (ARRIVE_DIST; a formation slot wants tighter).
     arrive: f64,
+    /// The route is still to be planned (plan_route, on the first tick - the world is there then).
+    plan: bool,
 }
 
 impl Trip {
@@ -243,6 +294,49 @@ impl Trip {
             cruise,
             contained,
             arrive: ARRIVE_DIST,
+            plan: cruise,
+        }
+    }
+
+    /// The route, planned on the first tick: straight there when the line is clear in this
+    /// client's world; else up to the lowest height the climb, the way across (with
+    /// LOW_ROUTE_MARGIN of air under it) and the way down are clear at, across, and down; the
+    /// cruise height (the legs new() made) only when part of the way is not loaded here - nothing
+    /// is known of it - or nothing lower is clear. 4 Nov: every trip of 48 blocks or more went up
+    /// to y 330 and back down - a perimeter bot crossing 100 blocks of its box flew 450 up and down
+    /// for it.
+    fn plan_route(&mut self, world: &World, from: Vec3) {
+        let dest = self.dest;
+        // A destination inside blocks is planned to the clear spot by it (tick() moves there too).
+        let to = if geom::stand_clear(world, dest) { dest } else { geom::nearest_clear(world, dest, 3).unwrap_or(dest) };
+        let route = if !loaded_between(world, from, to) {
+            "via the cruise height (part of the way is not loaded here)".to_string()
+        } else if geom::path_clear(world, from, to) {
+            self.legs.clear();
+            self.goal = dest;
+            "straight".to_string()
+        } else if let Some(y) = lowest_over(world, from, to) {
+            self.legs.clear();
+            let up = Vec3::new(from.x, y, from.z);
+            let over = Vec3::new(to.x, y, to.z);
+            if up.distance_to(from) > 0.5 {
+                self.legs.push_back(up);
+            }
+            if over.distance_to(to) > 0.5 {
+                self.legs.push_back(over);
+            }
+            self.legs.push_back(dest);
+            self.goal = self.legs.pop_front().unwrap_or(dest);
+            format!("over at y {y:.0}")
+        } else if self.legs.len() > 1 {
+            "via the cruise height (nothing lower is clear)".to_string()
+        } else {
+            "straight, backing off upward if it must (short, and nothing over the way is clear)".to_string()
+        };
+        if self.quiet {
+            tracing::debug!(target: "goto", "route to {}: {route}", fmt(dest));
+        } else {
+            tracing::info!(target: "goto", "route to {}: {route}", fmt(dest));
         }
     }
 
@@ -292,6 +386,10 @@ impl Trip {
     /// One tick. `pos` is where the server last accepted us; `health` decides what a clip down
     /// through a floor may cost.
     pub fn tick(&mut self, world: &World, pos: Vec3, budget: &Budget, clips: &RefusedClips, health: f32) -> Step {
+        if self.plan {
+            self.plan = false;
+            self.plan_route(world, pos);
+        }
         // Leg reached: next leg, or done.
         let reach = if self.precise > 0 { 0.05 } else if self.legs.is_empty() { self.arrive } else { ARRIVE_DIST };
         if pos.distance_to(self.goal) <= reach {
@@ -692,6 +790,13 @@ mod tests {
         (world, partial)
     }
 
+    /// A trip that keeps the route new() gave it (the cruise height for a long one): for the tests of
+    /// what happens on that climb.
+    fn unplanned(mut t: Trip) -> Trip {
+        t.plan = false;
+        t
+    }
+
     /// A trip run to its end with the server accepting every hop: the hops (from, to).
     fn run(t: &mut Trip, w: &World, pos: Vec3, clips: &RefusedClips) -> Vec<(Vec3, Vec3)> {
         run_hurt(t, w, pos, clips, 20.0).unwrap_or_else(|(at, why)| panic!("trip failed at {at:?}: {why}"))
@@ -735,14 +840,14 @@ mod tests {
         let start = Vec3::new(0.5, 100.0, 0.5);
         let dest = Vec3::new(120.5, 100.0, 0.5);
         // Nothing refused: up through the roof where it stands.
-        let hops = run(&mut Trip::new(1, start, dest, 30.0, 30.0, &b, "test", true, false), &w, start, &RefusedClips::default());
+        let hops = run(&mut unplanned(Trip::new(1, start, dest, 30.0, 30.0, &b, "test", true, false)), &w, start, &RefusedClips::default());
         let clips = clips_up(&hops);
         assert_eq!(clips.len(), 1, "{clips:?}");
         assert!(horiz(clips[0].0, start) < 0.01 && clips[0].1.y >= 104.0, "{clips:?}");
         // That clip refused: across under the roof first (toward the destination), and up there.
         let mut refused = RefusedClips::default();
         refused.add(start, clips[0].1.y);
-        let hops = run(&mut Trip::new(2, start, dest, 30.0, 30.0, &b, "test", true, false), &w, start, &refused);
+        let hops = run(&mut unplanned(Trip::new(2, start, dest, 30.0, 30.0, &b, "test", true, false)), &w, start, &refused);
         let clips = clips_up(&hops);
         assert_eq!(clips.len(), 1, "{clips:?}");
         let (from, to) = clips[0];
@@ -759,7 +864,7 @@ mod tests {
         let dest = Vec3::new(120.5, 100.0, 0.5);
         let mut refused = RefusedClips::default();
         refused.add(start, 104.0);
-        let hops = run(&mut Trip::new(1, start, dest, 30.0, 30.0, &b, "test", true, false), &w, start, &refused);
+        let hops = run(&mut unplanned(Trip::new(1, start, dest, 30.0, 30.0, &b, "test", true, false)), &w, start, &refused);
         assert!(clips_up(&hops).is_empty(), "clipped: {:?}", clips_up(&hops));
         assert!(hops.iter().any(|(_, p)| (p.x - 16.5).abs() < 0.01 && p.y > 102.0 && p.y < 104.0), "never went up through the hole");
     }
@@ -773,19 +878,19 @@ mod tests {
         let start = Vec3::new(0.5, 144.5, 0.5);
         let dest = Vec3::new(120.5, 140.0, 0.5);
         // Nothing refused: straight up from where it stands.
-        let hops = run(&mut Trip::new(1, start, dest, 30.0, 30.0, &b, "test", true, false), &w, start, &RefusedClips::default());
+        let hops = run(&mut unplanned(Trip::new(1, start, dest, 30.0, 30.0, &b, "test", true, false)), &w, start, &RefusedClips::default());
         assert!(horiz(hops[0].1, start) < 0.01 && hops[0].1.y > start.y, "{:?}", hops[0]);
         // The way up refused: across first, and up from another column.
         let mut refused = RefusedClips::default();
         assert!(refused.add_way(start, Vec3::new(0.5, 147.5, 0.5)));
         assert!(!refused.add_way(start, Vec3::new(0.5, 150.5, 0.5)), "the same way twice");
-        let hops = run(&mut Trip::new(2, start, dest, 30.0, 30.0, &b, "test", true, false), &w, start, &refused);
+        let hops = run(&mut unplanned(Trip::new(2, start, dest, 30.0, 30.0, &b, "test", true, false)), &w, start, &refused);
         let first = hops[0].1;
         assert!((first.y - start.y).abs() < 0.01 && horiz(first, start) > 0.1, "first hop {first:?}");
         assert!(hops.iter().any(|(a, p)| horiz(*a, start) >= 7.9 && p.y > a.y + 1.0), "never climbed elsewhere");
         // That way across refused as well: the next try is yet another way.
         assert!(refused.add_way(start, first));
-        let hops = run(&mut Trip::new(3, start, dest, 30.0, 30.0, &b, "test", true, false), &w, start, &refused);
+        let hops = run(&mut unplanned(Trip::new(3, start, dest, 30.0, 30.0, &b, "test", true, false)), &w, start, &refused);
         let second = hops[0].1;
         assert!(!refused.way_refused(start, second), "{second:?}");
         assert!(unit(second - start).unwrap().dot(unit(first - start).unwrap()) < SAME_WAY_COS, "{first:?} then {second:?}");
@@ -808,11 +913,11 @@ mod tests {
         let mut refused = RefusedClips::default();
         assert!(refused.add_way(start, dest));
         // Straight up out of the crops, then on.
-        let hops = run(&mut Trip::new(1, start, dest, 30.0, 30.0, &b, "test", true, false), &w, start, &refused);
+        let hops = run(&mut unplanned(Trip::new(1, start, dest, 30.0, 30.0, &b, "test", true, false)), &w, start, &refused);
         assert!(horiz(hops[0].1, start) < 0.01 && hops[0].1.y > start.y, "{:?}", hops[0]);
         // Up refused as well: given up there, not flown into again.
         assert!(refused.add_way(start, Vec3::new(0.5, 103.2, 0.5)));
-        let (at, _) = run_hurt(&mut Trip::new(2, start, dest, 30.0, 30.0, &b, "test", true, false), &w, start, &refused, 20.0).unwrap_err();
+        let (at, _) = run_hurt(&mut unplanned(Trip::new(2, start, dest, 30.0, 30.0, &b, "test", true, false)), &w, start, &refused, 20.0).unwrap_err();
         assert!(at.distance_to(start) < 0.01, "{at:?}");
     }
 
@@ -870,6 +975,46 @@ mod tests {
         let clips = RefusedClips::default();
         let gave_up = (0..400u32).find(|i| matches!(t.tick(&w, if i % 2 == 0 { low } else { high }, &b, &clips, 20.0), Step::Failed(_)));
         assert!(gave_up.is_some_and(|i| i <= STUCK_GIVEUP_TICKS + RECENT_TICKS as u32), "gave up at {gave_up:?}");
+    }
+
+    fn highest(hops: &[(Vec3, Vec3)]) -> f64 {
+        hops.iter().map(|(_, p)| p.y).fold(f64::MIN, f64::max)
+    }
+
+    #[test]
+    fn a_clear_way_is_flown_straight_not_via_the_sky() {
+        // 4 Nov: every trip of 48 blocks or more climbed to y 330 and back down.
+        let (w, _keep) = world_with(std::iter::empty());
+        let b = Budget::default();
+        let start = Vec3::new(0.5, 90.0, 0.5);
+        let dest = Vec3::new(100.5, 85.0, 30.5);
+        let hops = run(&mut Trip::new(1, start, dest, 30.0, 30.0, &b, "test", true, false), &w, start, &RefusedClips::default());
+        assert!(highest(&hops) <= 90.01, "climbed to {}", highest(&hops));
+    }
+
+    #[test]
+    fn a_wall_in_the_way_is_flown_over_just_above_it() {
+        // A wall at x 50, up to y 111, right across the way.
+        let wall = (-60..=60).flat_map(|z| (90..=111).map(move |y| BlockPos::new(50, y, z)));
+        let (w, _keep) = world_with(wall);
+        let b = Budget::default();
+        let start = Vec3::new(0.5, 95.0, 0.5);
+        let dest = Vec3::new(100.5, 95.0, 0.5);
+        let hops = run(&mut Trip::new(1, start, dest, 30.0, 30.0, &b, "test", true, false), &w, start, &RefusedClips::default());
+        let top = highest(&hops);
+        assert!((112.0..=120.0).contains(&top), "flew at {top}: over the wall (112), with a little room - not the cruise height");
+    }
+
+    #[test]
+    fn a_way_not_loaded_here_still_goes_via_the_cruise_height() {
+        let (w, _keep) = world_with(std::iter::empty());
+        let b = Budget::default();
+        let start = Vec3::new(0.5, 90.0, 0.5);
+        // The test world is loaded to x 143: x 300 is not.
+        let dest = Vec3::new(300.5, 90.0, 0.5);
+        let mut t = Trip::new(1, start, dest, 30.0, 30.0, &b, "test", true, false);
+        t.tick(&w, start, &b, &RefusedClips::default(), 20.0);
+        assert_eq!(t.goal().y, CRUISE_Y, "nothing known of the way: up to the open sky first");
     }
 
     #[test]

@@ -691,7 +691,7 @@ pub async fn run(dir: PathBuf, accounts_root: PathBuf, role: Role, server: Optio
         .set_handler(handle)
         .set_swarm_handler(swarm_handle)
         .set_swarm_state(SwarmState)
-        .add_plugins((crate::movement::MovementPlugin, crate::damage::DamagePlugin, crate::chests::ChestsPlugin, SwarmPlugin))
+        .add_plugins((crate::movement::MovementPlugin, crate::damage::DamagePlugin, crate::chests::ChestsPlugin, crate::border::BorderPlugin, SwarmPlugin))
         .reconnect_after(Duration::from_secs(30))
         .start(cfg.server.as_str())
         .await;
