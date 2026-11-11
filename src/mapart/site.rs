@@ -325,7 +325,11 @@ pub fn survey(bot: &Client) -> Result<Site, String> {
     let world = bot.world().map_err(|e| e.to_string())?;
     let w = world.read();
     let centre = BlockPos::new(mid.0, art.y, mid.1);
-    let home = |p: &BlockPos| (p.x - at.x).pow(2) + (p.y - at.y).pow(2) + (p.z - at.z).pow(2);
+    // Nearest the bot across, but at the platform's height, not the bot's: of a stack, the one on
+    // the floor (9 Nov: anvils stacked y 124 to 131 - surveyed from y 129 it took the one at 129,
+    // and beside it every way out ran through the stack, for an hour).
+    let floor = art.y + 1;
+    let home = |p: &BlockPos| (p.x - at.x).pow(2) + (p.y - floor).pow(2) + (p.z - at.z).pow(2);
     let nearest_home = |states: azalea::block::BlockStates| -> Option<BlockPos> {
         w.find_blocks(centre, &states).filter(|p| in_span(*p)).min_by_key(home)
     };

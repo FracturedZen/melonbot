@@ -8,7 +8,7 @@ rem a player came into view, or Disconnect), which stays out until you run this 
 rem Close this window to stop it.
 
 rem ====== SET THIS to the bot's account name ======
-set ACCOUNT=CHANGE_ME
+set ACCOUNT=Shopper
 rem ================================================
 
 title Stick-seller (Rust) - %ACCOUNT%

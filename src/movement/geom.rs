@@ -72,6 +72,12 @@ pub fn first_stand_above(world: &World, from: Vec3, max_y: f64) -> Option<f64> {
         }
         y += 0.25;
     }
+    // The grid steps from `from`, so it can step past `max_y` itself - a goal on a block's top
+    // from feet at y 60.1, say: 62.85 is in the block, 63.1 is over the goal (10 Nov: a perimeter
+    // bot in water under a floor was "boxed in" every tick with open air right over it).
+    if seen_solid && stand_clear(world, Vec3::new(from.x, max_y, from.z)) {
+        return Some(max_y);
+    }
     None
 }
 

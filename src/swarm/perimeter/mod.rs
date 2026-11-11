@@ -723,6 +723,14 @@ pub fn tick(bot: &Client, s: &Arc<Shared>, ctx: &Arc<SwarmCtx>, p: &Arc<Perimete
     if ticks.is_multiple_of(20) {
         movement::set_max_bps(bot, ctx.cfg.read().max_speed);
     }
+    // Out of water or lava before anything else - eating, an errand or the digging.
+    if dig::get_dry(bot, p, link, ticks) {
+        if ticks.is_multiple_of(5) {
+            let state = link.perimeter.lock().status.clone();
+            *link.row.lock() = row(bot, s, link, &state);
+        }
+        return;
+    }
     // Its base: the signed chests where it is logged in, seen once their chunks are in.
     if ticks.is_multiple_of(40) {
         base::record(bot, ctx, p, &link.name, false);

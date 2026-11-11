@@ -1030,7 +1030,45 @@ async fn approach(bot: &Client, s: &Site, pos: BlockPos) -> Result<(), String> {
     }
     let over = Vec3::new(pos.x as f64 + 0.5, (pos.y.max(s.art.y) + 4) as f64, pos.z as f64 + 0.5);
     let _ = movement::fly_to(bot, over, "round").await;
-    chests::fly_within_reach(bot, pos).await.map_err(|_| last)
+    if chests::fly_within_reach(bot, pos).await.is_ok() {
+        return Ok(());
+    }
+    // Last: straight up till the way across is clear, over to the art by the target at that
+    // height, down onto it and in from there (9 Nov: parked beside a stack of anvils, every way
+    // out - and three blocks up - ran through the stack).
+    let land = over_art(pos.x as f64 + 0.5, pos.z as f64 + 0.5);
+    if let Ok(p) = bot.position()
+        && let Some(y) = climb_out(bot, s, p, land)
+    {
+        info!(target: "mapart", "boxed in at {} - out by way of y {y:.0}", fmt_pos(BlockPos::from(p)));
+        let _ = movement::fly_to(bot, Vec3::new(p.x, y, p.z), "climb").await;
+        let _ = movement::fly_to(bot, Vec3::new(land.x, y, land.z), "climb").await;
+        let _ = movement::fly_to(bot, land, "climb").await;
+        if chests::fly_within_reach(bot, pos).await.is_ok() {
+            return Ok(());
+        }
+    }
+    Err(last)
+}
+
+/// The lowest height straight over `from`, up to the top of the site, from which the way across
+/// to over `to` and down onto it is clear. None when the way up is blocked first.
+fn climb_out(bot: &Client, s: &Site, from: Vec3, to: Vec3) -> Option<f64> {
+    let world = bot.world().ok()?;
+    let w = world.read();
+    let mut y = from.y.floor() + 1.0;
+    while y <= s.max.y as f64 {
+        let up = Vec3::new(from.x, y, from.z);
+        if !movement::geom::path_clear(&w, from, up) {
+            return None;
+        }
+        let across = Vec3::new(to.x, y, to.z);
+        if movement::geom::path_clear(&w, up, across) && movement::geom::path_clear(&w, across, to) {
+            return Some(y);
+        }
+        y += 1.0;
+    }
+    None
 }
 
 /// Open a block's screen from within reach.
@@ -1116,9 +1154,6 @@ async fn get_levels(ctx: &Shared, bot: &Client, s: &Site) -> Result<(), Stop> {
     if level(bot) >= 1 {
         return Ok(());
     }
-    if let Some(anvil) = s.anvil {
-        let _ = approach(bot, s, anvil).await;
-    }
     for _ in 0..16 {
         if interrupted(ctx, bot) {
             return Err(Stop::Interrupted);
@@ -1126,7 +1161,12 @@ async fn get_levels(ctx: &Shared, bot: &Client, s: &Site) -> Result<(), Stop> {
         if level(bot) >= XP_BANK {
             break;
         }
+        // The bottles first, then to the anvil: the way to the chest is from the platform side,
+        // not from beside the anvil (9 Nov: from there it was boxed in).
         take_one_kind(ctx, bot, s, site::XP, "experience_bottle", "bottles o' enchanting").await?;
+        if let Some(anvil) = s.anvil {
+            let _ = approach(bot, s, anvil).await;
+        }
         let Some((slot, _)) = bag_slot(bot, "experience_bottle") else { continue };
         phase(ctx, "throwing XP bottles for the anvil");
         if inv::hold(bot, slot, &[]).is_none() {

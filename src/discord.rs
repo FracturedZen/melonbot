@@ -105,10 +105,8 @@ impl Discord {
     }
 }
 
-pub const HIDDEN: &str = "[hidden]";
-
 /// A count for a Discord line in a form the scrubber keeps: 666, 1.9k, 395.2k, 1.13M. scrub()
-/// hides every 4+ digit number, so the hourly summary read "[hidden] melons mined" (16 Oct).
+/// takes out every 4+ digit number, so the hourly summary read "[hidden] melons mined" (16 Oct).
 pub fn count(n: i64) -> String {
     let a = n.unsigned_abs() as f64;
     let sign = if n < 0 { "-" } else { "" };
@@ -131,16 +129,30 @@ static LABELLED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b[xyz]\s*[
 static BIG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"-?\d{4,}(?:\.\d+)?").unwrap());
 static THREE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d{3,}").unwrap());
 static FRACTION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\.\d+").unwrap());
+/// A position marked while it is taken out.
+const MARK: &str = "\u{1}";
+/// A marked position, with the word that led to it and the space before.
+static GONE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s*(?:\b(?:at|near|to|from|by|around|over|under)\s+)?\x{1}").unwrap());
+/// A separator left with nothing after it before a dash: "drown, - it stays out".
+static BEFORE_DASH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s*[,;:]\s*-\s").unwrap());
+static ENDS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[\s,;:-]+|[\s,;:-]+$").unwrap());
+static SPACES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s{2,}").unwrap());
 
-/// Port of NoCoords.scrub: number groups with any 3+ digit part, labelled x/y/z values and any 4+
-/// digit number become "[hidden]". "health 3/20" stays.
+/// Never where anything is, on Discord (the user: "it shouldnt even mention coordinates in the
+/// discord at all ever not blurred out not x'd out. just removed gone"). Number groups with any 3+
+/// digit part, labelled x/y/z values and any 4+ digit number go - with the "at" before them - and
+/// no placeholder is left ("[hidden]" was, until 8 Nov). "health 3/20" stays. Empty: not sent.
 pub fn scrub(s: &str) -> String {
     let grouped = GROUP.replace_all(s, |c: &regex::Captures| {
         let whole = &c[0];
-        if THREE.is_match(&FRACTION.replace_all(whole, "")) { HIDDEN.to_string() } else { whole.to_string() }
+        if THREE.is_match(&FRACTION.replace_all(whole, "")) { MARK.to_string() } else { whole.to_string() }
     });
-    let labelled = LABELLED.replace_all(&grouped, HIDDEN);
-    BIG.replace_all(&labelled, HIDDEN).into_owned()
+    let labelled = LABELLED.replace_all(&grouped, MARK);
+    let marked = BIG.replace_all(&labelled, MARK);
+    let gone = GONE.replace_all(&marked, "");
+    let gone = BEFORE_DASH.replace_all(&gone, " - ");
+    let gone = ENDS.replace_all(&gone, "");
+    SPACES.replace_all(&gone, " ").into_owned()
 }
 
 #[cfg(test)]
@@ -148,11 +160,19 @@ mod tests {
     use super::scrub;
 
     #[test]
-    fn hides_coordinates_keeps_small_numbers() {
-        assert_eq!(scrub("died at 1230 63 -3456"), "died at [hidden]");
+    fn takes_coordinates_out_keeps_small_numbers() {
+        assert_eq!(scrub("died at 1230 63 -3456"), "died");
         assert_eq!(scrub("hunger 3/20, 2 totems"), "hunger 3/20, 2 totems");
-        assert_eq!(scrub("x: 1230"), "[hidden]");
-        assert_eq!(scrub("mined 1859 melons"), "mined [hidden] melons");
+        assert_eq!(scrub("x: 1230"), "");
+        assert_eq!(scrub("mined 1859 melons"), "mined melons");
+        assert_eq!(
+            scrub("AUTO-LOGGED OUT: down to 12 health from drown, at -799509 55 799758 - it stays out until started again"),
+            "AUTO-LOGGED OUT: down to 12 health from drown - it stays out until started again"
+        );
+        assert_eq!(scrub("flying to 1200 70 -455 now"), "flying now");
+        for s in ["died at 1230 63 -3456", "x: 1230", "at -799509 55 799758"] {
+            assert!(!scrub(s).contains("hidden") && !scrub(s).chars().any(|c| c.is_ascii_digit()), "{s}");
+        }
     }
 
     #[test]

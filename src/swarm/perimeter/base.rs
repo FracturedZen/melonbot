@@ -392,9 +392,10 @@ pub fn fill_ready(bot: &Client, job: &JobConfig) -> Fill {
     }
 }
 
-/// The nearest dropped fill within `r` blocks.
-pub fn fill_lying_near(bot: &Client, job: &JobConfig, r: f64) -> Option<Vec3> {
-    crate::entities::near(bot).into_iter().find(|(d, e)| *d <= r && e.item.is_some_and(|k| job.is_fill(inv::id(k)))).map(|(_, e)| e.pos)
+/// Dropped fill within `r` blocks, the nearest first. Read with no world lock held (the entities
+/// take the ECS): which of it there is a dry way to is the caller's to work out after.
+pub fn fill_lying_near(bot: &Client, job: &JobConfig, r: f64) -> Vec<Vec3> {
+    crate::entities::near(bot).into_iter().filter(|(d, e)| *d <= r && e.item.is_some_and(|k| job.is_fill(inv::id(k)))).map(|(_, e)| e.pos).collect()
 }
 
 // ------------------------------------------------------------------ room

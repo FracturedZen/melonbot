@@ -1,7 +1,7 @@
 @echo off
-rem Starts the mapart bot: it builds carpet map art on its site's platform, maps it, locks and names
-rem the map and stores it. Maps come in through bots\%BOT%\inbox\ (drop a .litematic, .schem or .nbt
-rem there), or through Discord if it is set up (its bot token in bots\%BOT%\discord-token.txt).
+rem Starts the mapart bot: it takes carpet map art sent to its Discord channel (#mapart) and builds
+rem it on the water of its site, maps it, locks the map and stores it. Its Discord bot token is
+rem bots\%BOT%\discord-token.txt.
 rem Its settings are bots\%BOT%\config.json; its debug logs are in bots\%BOT%\debug\.
 rem
 rem The first start asks you to sign in (a microsoft.com/link address and a code in this window):

@@ -88,6 +88,8 @@ struct Inner {
     in_queue: bool,
     queue_sent: u32,
     next_queue_at: Option<Instant>,
+    /// Our entity id on the server: it changes when the server moves us to another world.
+    entity_id: Option<i32>,
     /// Logged out because a player came into view: stays out (no reconnect) until relaunched.
     logged_out: bool,
     ticks: u64,
@@ -327,6 +329,7 @@ pub async fn handle(bot: Client, event: Event, state: State) -> eyre::Result<()>
             inner.last_health = None;
             // First status line 5 s in: health reads 1 until the server's first health packet.
             inner.last_status = Some(Instant::now() - Duration::from_secs(55));
+            inner.entity_id = None;
             // A new world after a queue command was sent: back on the server.
             if inner.in_queue && inner.queue_sent > 0 {
                 info!("joined a new world after {} queue command(s) - back on the server", inner.queue_sent);
@@ -507,6 +510,32 @@ fn tick(bot: &Client, s: &Arc<Shared>) {
                 s.discord.send(&format!("hourly: {} melons mined, {} placed this hour; {}", count(mined), count(placed), crate::progress::summary(s)));
             } else {
                 info!("hourly summary not posted: in the world for only {} min of the last hour ({mined} mined, {placed} placed)", in_world / 1200);
+            }
+        }
+    }
+
+    // Moved to another world without a new login - the proxy putting us in its queue server and
+    // back: azalea sends Event::Login only the first time, so it is caught here, by our entity id
+    // changing, and treated as a join (7 Nov: kicked to the queue at 21:30 and sent back 4 s
+    // later, the mapper kept its in-queue flag, its builder had stopped with the world gone for a
+    // moment, and it sat 8 hours with 60 maps in line).
+    if let Ok(id) = bot.minecraft_id() {
+        let moved = {
+            let mut inner = s.inner.lock();
+            let moved = inner.entity_id.replace(id.0).is_some_and(|was| was != id.0);
+            if moved && inner.in_queue && inner.queue_sent > 0 {
+                info!("moved to a new world after {} queue command(s) - back on the server", inner.queue_sent);
+                inner.in_queue = false;
+                inner.queue_sent = 0;
+                inner.next_queue_at = None;
+            }
+            moved
+        };
+        if moved {
+            info!("the server moved us to another world");
+            *s.joined_at.lock() = Some(Instant::now());
+            if s.routine_on && !s.routine_stopped.load(Ordering::SeqCst) {
+                s.start_routine(bot, true);
             }
         }
     }

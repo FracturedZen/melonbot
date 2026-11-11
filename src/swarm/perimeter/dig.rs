@@ -12,6 +12,10 @@
 //!   progress reaches 1 - counted from its own START, so other breaks meanwhile do not touch it.
 //!   The other is mined here: START, then STOP once its progress passes stop-progress. Nothing else
 //!   is broken while that one is mined - every START restarts the server's count for it.
+//!   As the Autoplay addon's BreakManager does it (10 Nov, "autoplay is known to work already on
+//!   the server"): the delayed slot free while one is mined here, that one goes into it (STOPped
+//!   short of 0.7) and the next is started; a STOP is seen to break its block before anything is
+//!   STARTed, and is sent again if not; the delayed block's tool is in hand for its last ticks.
 //! Sealing is LavaClear/SpongeDrain's: the fill block in the offhand, clicked onto the fluid's own
 //! cell - water and lava are replaceable, so the block goes into it. Out of fill, it mines some
 //! close by, any y in the box (fill_step).
@@ -32,7 +36,7 @@ use azalea::{
     registry::{builtin::BlockKind, tags},
     world::World,
 };
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::{CELL, Claim, JobConfig, Perimeter, Refused, base};
 use crate::{
@@ -88,6 +92,11 @@ const FILL_FOUND: usize = 32;
 const FILL_GOAL_TICKS: u64 = 200;
 /// None close by: looked for again after this long.
 const FILL_LOOK_TICKS: u64 = 200;
+/// Fill it could mine looked at for a way to it, at most, in a look.
+const FILL_CHECKS: usize = 512;
+/// In water or lava: a dry spot looked for this far straight up, else this far round.
+const DRY_UP: i32 = 48;
+const DRY_ROUND: i32 = 6;
 
 /// One bot's digging state.
 #[derive(Default)]
@@ -95,8 +104,15 @@ pub struct BotDig {
     /// A slow block being broken: where, the tick its STOP goes, and whether its water is sealed
     /// straight after (a waterlogged block, kelp).
     mining: Option<(BlockPos, u64, bool)>,
+    /// Its START tick and progress a tick (the server counts from that START).
+    mining_from: (u64, f32),
+    /// Its STOP sent and not yet seen to break it: where, the tick it is STOPped again by, its
+    /// START tick and progress a tick, and whether its water is sealed (Autoplay's 300 ms wait).
+    stopped: Option<(BlockPos, u64, u64, f32, bool)>,
     /// The block in the server's delayed-destroy slot, and the tick it is given up on.
     delayed: Option<(BlockPos, u64)>,
+    /// Its START tick and the ticks it takes to break: its tool is in hand for its last ones.
+    delayed_from: (u64, u64),
     /// START and STOP together sent: where, when (looked at again SEMI_CHECK later), and whether
     /// the bot stood on a block then.
     semi_sent: HashMap<BlockPos, (u64, bool)>,
@@ -145,6 +161,8 @@ pub struct BotDig {
     fill_goal: Option<(BlockPos, u64)>,
     fill_skip: HashSet<BlockPos>,
     fill_look_at: u64,
+    /// Water or lava in its body: getting out (get_dry).
+    wet: bool,
     pub cell: Option<(i32, i32)>,
     pub status: String,
     pub broken: u64,
@@ -427,31 +445,89 @@ pub fn tick(bot: &Client, ctx: &SwarmCtx, p: &Perimeter, link: &BotLink, ticks: 
     st.fired.retain(|_, until| *until > ticks);
     settle_breaks(&mut st, ctx, p, &world.read(), job.protect_containers, ticks);
 
+    // Slow blocks two at once, as the Autoplay addon's BreakManager does it (10 Nov, the user:
+    // "autoplay is known to work already on the server"; MelonHack docs/double-break).
+    let answer = answer_ticks(bot);
+    // The delayed block's last ticks: the server counts its progress, and picks its drops, with
+    // what is in hand at the time - its tool goes in hand, and nothing wanting another is done
+    // till it breaks (Autoplay's hand manager holding the tool for the secondary).
+    let delayed_tool = delayed_due(&st, ticks, answer).map(|b| {
+        let state = world.read().get_block_state(b);
+        state.and_then(|s| nuker::best_tool_keeping(bot, s, job.retire_uses + 1).0)
+    });
+    let held = bot.selected_hotbar_slot().map(|h| h as usize + 36).ok();
+    if let Some(Some(slot)) = delayed_tool
+        && held != Some(slot)
+    {
+        inv::hold(bot, slot, &super::guard::weapon_hotbar(bot));
+        return Want::Moving;
+    }
+
+    // Its STOP sent and not yet seen to break it: nothing is STARTed till it is - a START moves
+    // the server's dig off it and restarts its count. Not broken by then, it is STOPped again: one
+    // the server scored under 0.7 is still its dig, the count running from the same START
+    // (Autoplay's time-since-last-primary-break and delay-before-assuming-failure, 300 ms).
+    if let Some((b, again_at, from, per_tick, seal)) = st.stopped {
+        let there = { world.read().get_block_state(b) }.is_some_and(|s| what(s, job.protect_containers) == What::Block);
+        if !there {
+            st.stopped = None;
+            st.mined += 1;
+            st.broken += 1;
+            p.board.lock().broken += 1;
+        } else if ticks < again_at {
+            st.status = format!("breaking {} {} {}", b.x, b.y, b.z);
+            return Want::Moving;
+        } else {
+            st.stopped = None;
+            *st.tries.entry(b).or_default() += 1;
+            if !refused(&st, ctx, p, b) {
+                debug!(target: "perimeter", "STOP {} {} {} not taken - STOP again", b.x, b.y, b.z);
+                st.mining = Some((b, ticks, seal));
+                st.mining_from = (from, per_tick);
+            }
+        }
+    }
+
     // A slow block under way: STOP when it is due - the server breaks it then - and seal its
     // water straight after if it held some.
     if let Some((b, stop_at, seal)) = st.mining {
-        if ticks < stop_at {
+        let (from, per_tick) = st.mining_from;
+        // In the delayed block's last ticks its tool is in hand: a STOP with another waits.
+        let wrong_tool = delayed_tool.is_some_and(|slot| {
+            let state = world.read().get_block_state(b);
+            state.is_some_and(|s| nuker::best_tool_keeping(bot, s, job.retire_uses + 1).0 != slot)
+        });
+        if ticks < stop_at || wrong_tool {
+            // The delayed slot free, and more to break: this one goes into it - STOPped short of
+            // 0.7, the server keeps it and breaks it itself at 1, counted from its own START - and
+            // the next is started below (Autoplay's "moving primary to secondary"). Not one whose
+            // water is sealed right after: the server breaks it at a tick nobody sees.
+            let more = st.queue.iter().any(|q| *q != b && !st.fired.contains_key(q));
+            if st.delayed.is_some() || seal || wrong_tool || !more || !movement::packet_room(bot, 3 + MOVE_RESERVE) {
+                st.status = format!("breaking {} {} {}", b.x, b.y, b.z);
+                return Want::Moving;
+            }
+            harvest::send_action(bot, b, false);
+            let natural = (1.0 / per_tick as f64).ceil() as u64;
+            let until = from + natural * 2 + 60;
+            debug!(target: "perimeter", "DELAYED {} {} {} (was mined here) -> the server breaks it in {} ticks", b.x, b.y, b.z, (from + natural).saturating_sub(ticks));
+            st.delayed = Some((b, until));
+            st.delayed_from = (from, natural);
+            st.fired.insert(b, until);
+            st.mining = None;
+        } else {
+            harvest::send_action(bot, b, false);
+            debug!(target: "perimeter", "STOP {} {} {}", b.x, b.y, b.z);
+            st.mining = None;
+            st.stopped = Some((b, ticks + answer, from, per_tick, seal));
+            st.fired.insert(b, ticks + answer + RETRY_TICKS);
+            if seal && let base::Fill::Ready(hand) = base::fill_ready(bot, &job) {
+                place(bot, b, hand);
+                st.placed += 1;
+                p.board.lock().placed += 1;
+            }
             st.status = format!("breaking {} {} {}", b.x, b.y, b.z);
             return Want::Moving;
-        }
-        harvest::send_action(bot, b, false);
-        debug!(target: "perimeter", "STOP {} {} {}", b.x, b.y, b.z);
-        st.mining = None;
-        st.mined += 1;
-        st.broken += 1;
-        let sealed = seal
-            && match base::fill_ready(bot, &job) {
-                base::Fill::Ready(from) => {
-                    place(bot, b, from);
-                    st.placed += 1;
-                    true
-                }
-                _ => false,
-            };
-        let mut board = p.board.lock();
-        board.broken += 1;
-        if sealed {
-            board.placed += 1;
         }
     }
 
@@ -677,6 +753,8 @@ fn dig_cell(
     };
     let max_places = job.places_per_tick.max(1);
     let max_breaks = job.max_breaks_per_tick.clamp(1, 20);
+    // The delayed block's tool is in hand for its last ticks (tick): nothing swaps it out.
+    let hold_delayed = delayed_due(st, ticks, answer_ticks(bot)).is_some();
     'work: for q in near {
         for act in plan(&w, q, protect, &left) {
             match act {
@@ -734,7 +812,7 @@ fn dig_cell(
                     if let Some(slot) = slot
                         && bot.selected_hotbar_slot().map(|h| h as usize + 36).ok() != Some(slot)
                     {
-                        if !slow.is_empty() {
+                        if !slow.is_empty() || hold_delayed {
                             continue;
                         }
                         inv::hold(bot, slot, &super::guard::weapon_hotbar(bot));
@@ -782,6 +860,7 @@ fn dig_cell(
             let until = ticks + natural * 2 + 60;
             debug!(target: "perimeter", "DELAYED {} {} {} perTick {per_tick:.3} -> the server breaks it in {natural} ticks", b.x, b.y, b.z);
             st.delayed = Some((b, until));
+            st.delayed_from = (ticks, natural);
             st.fired.insert(b, until);
             *st.tries.entry(b).or_default() += 1;
             breaks += 1;
@@ -794,6 +873,7 @@ fn dig_cell(
             let wait = (job.stop_progress.clamp(0.7, 1.0) / per_tick as f64).ceil() as u64;
             debug!(target: "perimeter", "START {} {} {} perTick {per_tick:.3} -> STOP in {wait} ticks", b.x, b.y, b.z);
             st.mining = Some((b, ticks + wait, seal));
+            st.mining_from = (ticks, per_tick);
             st.fired.insert(b, ticks + wait + RETRY_TICKS);
             *st.tries.entry(b).or_default() += 1;
             breaks += 1;
@@ -857,7 +937,12 @@ fn dig_cell(
     }
     if need_fill && !acted {
         st.no_fill_ticks += 1;
-        if let Some(item) = base::fill_lying_near(bot, job, 24.0) {
+        let lying = base::fill_lying_near(bot, job, 24.0);
+        let dry = {
+            let w = world.read();
+            lying.into_iter().find(|i| dry_lying(&w, *i, pos.y))
+        };
+        if let Some(item) = dry {
             movement::steer(bot, item + Vec3::new(0.0, 0.2, 0.0), "perimeter-fill", 0.5);
             st.status = format!("cell {} {}: picking up fill", c.0, c.1);
             return Want::Moving;
@@ -996,7 +1081,8 @@ fn feet_columns(feet: Vec3) -> Vec<(i32, i32)> {
 /// Out of fill, what it carries and what lies about (read before the world).
 struct FillIn {
     carried: usize,
-    lying: Option<Vec3>,
+    /// Dropped fill about, the nearest first - dry or not (dry_lying sorts that out).
+    lying: Vec<Vec3>,
     /// An empty bag slot.
     room: bool,
     /// A stack dug that is not fill, to throw out for room.
@@ -1058,7 +1144,7 @@ fn fill_step(st: &mut BotDig, job: &JobConfig, w: &World, area: &Box3, protect: 
             .map(|b| fill_stand(w, *b));
         return FillStep::Mine(reach, land);
     }
-    if let Some(item) = f.lying {
+    if let Some(item) = f.lying.iter().copied().find(|i| dry_lying(w, *i, pos.y)) {
         st.status = format!("out of fill - picking up what was mined ({} carried)", f.carried);
         return FillStep::Fly(item + Vec3::new(0.0, 0.2, 0.0), 0.5);
     }
@@ -1106,8 +1192,8 @@ fn gives_fill(w: &World, b: BlockPos, job: &JobConfig, protect: bool, left: &Ref
     open && plan(w, b, protect, left) == [Act::Break { pos: b, seal: false }]
 }
 
-/// What gives fill (gives_fill) in the box within FILL_RADIUS of `eye`, any y - nearest first, at
-/// most FILL_FOUND of them, none in `skip`.
+/// What gives fill (gives_fill) in the box within FILL_RADIUS of `eye`, any y, with a dry way to
+/// it (dry_way_down) - nearest first, at most FILL_FOUND of them, none in `skip`.
 fn find_fill(w: &World, job: &JobConfig, area: &Box3, protect: bool, left: &Refused, eye: Vec3, skip: &HashSet<BlockPos>) -> Vec<BlockPos> {
     static OFFSETS: OnceLock<Vec<(i32, i32, i32)>> = OnceLock::new();
     let offsets = OFFSETS.get_or_init(|| {
@@ -1126,18 +1212,160 @@ fn find_fill(w: &World, job: &JobConfig, area: &Box3, protect: bool, left: &Refu
         v
     });
     let at = BlockPos::new(eye.x.floor() as i32, eye.y.floor() as i32, eye.z.floor() as i32);
+    let feet_y = eye.y - 1.62;
     let mut out = Vec::new();
+    let mut checked = 0;
     for (dx, dy, dz) in offsets {
         let b = BlockPos::new(at.x + dx, at.y + dy, at.z + dz);
         let inside = (area.min.x..=area.max.x).contains(&b.x) && (area.min.y..=area.max.y).contains(&b.y) && (area.min.z..=area.max.z).contains(&b.z);
         if inside && !skip.contains(&b) && gives_fill(w, b, job, protect, left) {
-            out.push(b);
-            if out.len() >= FILL_FOUND {
+            if dry_way_down(w, fill_stand(w, b), feet_y) {
+                out.push(b);
+                if out.len() >= FILL_FOUND {
+                    break;
+                }
+            }
+            checked += 1;
+            if checked >= FILL_CHECKS {
                 break;
             }
         }
     }
     out
+}
+
+/// `stand` is got to through dry air: straight down onto it from the bot's height (or it is no
+/// lower than the bot) - not through a floor, nor through water or lava (8 Nov: fill in a cave 22
+/// blocks under the floor was gone after, under water, until the bot drowned down to its logout).
+fn dry_way_down(w: &World, stand: Vec3, feet_y: f64) -> bool {
+    let mut y = stand.y;
+    loop {
+        let at = Vec3::new(stand.x, y, stand.z);
+        if !movement::geom::stand_clear(w, at) || body_wet(w, at) {
+            return false;
+        }
+        if y >= feet_y {
+            return true;
+        }
+        y = (y + 1.0).min(feet_y.max(stand.y));
+    }
+}
+
+/// Dropped fill it may go and pick up: lying in dry air, with a dry way straight down to it from
+/// the bot's height (dry_way_down), as for fill it mines (10 Nov: what FracAI007 mined fell through
+/// a gap into water under the floor; it went down after it, clipping through the floor, and sat
+/// under it until it drowned down to its logout). Checked in its block's column, as it is picked up.
+fn dry_lying(w: &World, item: Vec3, feet_y: f64) -> bool {
+    dry_way_down(w, Vec3::new(item.x.floor() + 0.5, item.y, item.z.floor() + 0.5), feet_y)
+}
+
+/// Water or lava in a block its body (feet `feet`) takes up.
+pub fn body_wet(w: &World, feet: Vec3) -> bool {
+    let (lo, hi) = ((feet.y + 0.01).floor() as i32, (feet.y + 1.79).floor() as i32);
+    feet_columns(feet)
+        .iter()
+        .any(|(x, z)| (lo..=hi).any(|y| w.get_block_state(BlockPos::new(*x, y, *z)).is_some_and(holds_fluid)))
+}
+
+/// A dry spot out of water or lava from `feet`: straight up to the first clear, dry one - out of a
+/// flooded pit the way it came - else the nearest clear, dry one within DRY_ROUND with a straight
+/// way to it, else straight up through whatever is over it (clip_up_dry), else the nearest dry one
+/// behind a block.
+fn way_out(w: &World, feet: Vec3) -> Option<Vec3> {
+    let base = Vec3::new(feet.x.floor() + 0.5, feet.y.floor(), feet.z.floor() + 0.5);
+    for dy in 1..=DRY_UP {
+        let up = base + Vec3::new(0.0, dy as f64, 0.0);
+        if !movement::geom::stand_clear(w, up) {
+            break;
+        }
+        if !body_wet(w, up) {
+            return Some(up);
+        }
+    }
+    let r = DRY_ROUND;
+    let mut best: Option<(bool, i32, Vec3)> = None;
+    for dx in -r..=r {
+        for dy in -r..=r {
+            for dz in -r..=r {
+                let d = dx * dx + dy * dy + dz * dz;
+                if best.is_some_and(|(blocked, bd, _)| !blocked && d > bd) {
+                    continue;
+                }
+                let c = base + Vec3::new(dx as f64, dy as f64, dz as f64);
+                if movement::geom::stand_clear(w, c) && !body_wet(w, c) {
+                    let key = (!movement::geom::path_clear(w, feet, c), d, c);
+                    if best.is_none_or(|b| (key.0, key.1) < (b.0, b.1)) {
+                        best = Some(key);
+                    }
+                }
+            }
+        }
+    }
+    match best {
+        Some((false, _, c)) => Some(c),
+        // Every dry spot about is behind a block, and the mover does not go through one sideways
+        // (10 Nov: FracAI007, clipped down through a floor into water, was sent to a dry spot
+        // beside it past the floor - the mover gave that up every tick for a minute and a half,
+        // under the open air it had come down from).
+        blocked => clip_up_dry(w, base).or(blocked.map(|(_, _, c)| c)),
+    }
+}
+
+/// Straight up through what is over `base` to the first clear, dry spot within DRY_UP: a vertical
+/// clip, the way the mover goes up through a roof - and the way back out of water it clipped into.
+fn clip_up_dry(w: &World, base: Vec3) -> Option<Vec3> {
+    (1..=DRY_UP).map(|dy| base + Vec3::new(0.0, dy as f64, 0.0)).find(|up| movement::geom::stand_clear(w, *up) && !body_wet(w, *up))
+}
+
+/// Never in water or lava, not for a moment (8 Nov, the user: "the permiter bots need to never
+/// drowned. never be underwater" - FracAI006, on its way to fill it could not get to, hung under
+/// water and drowned down to the guard's logout). With any in its body it gets out before anything
+/// else - an errand dropped, the way up first - and does not go back the way it went in: the fill
+/// it was after is skipped, the cell it was in left for PARK_SECS. True while it is getting out.
+pub fn get_dry(bot: &Client, p: &Perimeter, link: &BotLink, ticks: u64) -> bool {
+    let (Ok(pos), Ok(world)) = (bot.position(), bot.world()) else { return false };
+    let out = {
+        let w = world.read();
+        body_wet(&w, pos).then(|| way_out(&w, pos))
+    };
+    let mut st = link.perimeter.lock();
+    let Some(out) = out else {
+        if st.wet {
+            st.wet = false;
+            info!(target: "perimeter", "out of the water");
+        }
+        return false;
+    };
+    if !st.wet {
+        st.wet = true;
+        warn!(target: "perimeter", "in water or lava at {:.1} {:.1} {:.1} - getting out", pos.x, pos.y, pos.z);
+        link.stop_errand();
+        if let Some((t, _)) = st.fill_goal.take() {
+            st.fill_skip.insert(t);
+        }
+        st.fill_targets.clear();
+        st.fill_look_at = ticks + 20;
+        st.mining = None;
+        st.stopped = None;
+        if let Some(c) = st.cell.take() {
+            p.board.lock().park(c, PARK_SECS);
+            info!(target: "perimeter", "cell {} {} is left for {PARK_SECS} s - the way to its work went through water", c.0, c.1);
+        }
+    }
+    match out {
+        Some(to) => {
+            // Right onto it, a hair over: anywhere under its y the feet are still in the block
+            // below (10 Nov: FracAI006 "arrived" 0.1 short of a dry spot, its feet in the water
+            // under it, and hovered there for ten minutes).
+            movement::steer(bot, to + Vec3::new(0.0, 0.05, 0.0), "perimeter-dry", 0.04);
+            st.status = "in water - getting out".into();
+        }
+        None => {
+            movement::steer(bot, pos + Vec3::new(0.0, 1.0, 0.0), "perimeter-dry", 0.3);
+            st.status = "in water - no dry spot in sight, going up".into();
+        }
+    }
+    true
 }
 
 /// Where to be to mine `b` for fill: beside it in the open and out of water - on the ground there
@@ -1170,6 +1398,22 @@ fn fill_stand(w: &World, b: BlockPos) -> Vec3 {
 
 /// `at` was sent REFUSED_TRIES times in this band and is still there: the server will not let it
 /// go. It is left standing - for every bot (the board), and after a restart (progress.json).
+/// Ticks before the server's answer to a break can be back: the round trip and two, and never
+/// under Autoplay's delay-before-assuming-failure (300 ms).
+fn answer_ticks(bot: &Client) -> u64 {
+    let ping = bot.tab_list().ok().and_then(|t| t.get(&bot.uuid()).map(|i| i.latency)).unwrap_or(0).max(0) as u64;
+    (2 + ping.div_ceil(50)).max(6)
+}
+
+/// The block in the delayed slot, in its last ticks: from two before its break time (Autoplay's
+/// ticksUntilMined - 2) to an answer's time after it. Later than that it is only waited out.
+fn delayed_due(st: &BotDig, ticks: u64, answer: u64) -> Option<BlockPos> {
+    let (b, _) = st.delayed?;
+    let (from, natural) = st.delayed_from;
+    let elapsed = ticks.saturating_sub(from);
+    (elapsed + 2 >= natural && elapsed <= natural + answer).then_some(b)
+}
+
 fn refused(st: &BotDig, ctx: &SwarmCtx, p: &Perimeter, at: BlockPos) -> bool {
     if st.tries.get(&at).is_none_or(|n| *n < REFUSED_TRIES) {
         return false;
@@ -1485,6 +1729,108 @@ mod tests {
         assert!(movement::geom::supported(&w, s));
         assert_ne!((s.x, s.z), (0.5, 0.5), "not on the block it mines");
         assert!(block_dist(s + Vec3::new(0.0, 1.62, 0.0), at(0, 10, 0)) <= REACH);
+    }
+
+    #[test]
+    fn fill_under_a_floor_or_through_water_has_no_way_to_it() {
+        let mut blocks = Vec::new();
+        for x in -3..=3 {
+            for z in -3..=3 {
+                blocks.push((at(x, 20, z), STONE));
+            }
+        }
+        let (w, _keep) = world(&blocks);
+        let stand = Vec3::new(1.5, 10.0, 0.5);
+        assert!(!dry_way_down(&w, stand, 21.0), "the floor is in the way");
+        assert!(dry_way_down(&w, stand, 15.0), "under the floor it is open");
+        assert!(dry_way_down(&w, Vec3::new(1.5, 22.0, 0.5), 21.0), "no lower than the bot");
+        let (w, _keep) = world(&[(at(1, 14, 0), WATER)]);
+        assert!(!dry_way_down(&w, stand, 21.0), "water on the way down");
+        assert!(dry_way_down(&w, Vec3::new(5.5, 10.0, 5.5), 21.0));
+    }
+
+    #[test]
+    fn in_water_it_gets_out_the_way_up_else_the_nearest_dry_spot() {
+        // A flooded pit, open above: straight up out of it.
+        let mut blocks = Vec::new();
+        for x in -2i32..=2 {
+            for z in -2i32..=2 {
+                for y in 9..=13 {
+                    let wall = x.abs() == 2 || z.abs() == 2 || y == 9;
+                    if wall {
+                        blocks.push((at(x, y, z), STONE));
+                    } else if y <= 12 {
+                        blocks.push((at(x, y, z), WATER));
+                    }
+                }
+            }
+        }
+        let (w, _keep) = world(&blocks);
+        let feet = Vec3::new(0.5, 10.0, 0.5);
+        assert!(body_wet(&w, feet));
+        assert!(!body_wet(&w, Vec3::new(0.5, 13.0, 0.5)));
+        assert_eq!(way_out(&w, feet), Some(Vec3::new(0.5, 13.0, 0.5)));
+
+        // Under a roof: the nearest dry spot beside it.
+        let (w, _keep) = world(&[(at(0, 10, 0), WATER), (at(0, 11, 0), WATER), (at(0, 12, 0), STONE), (at(0, 9, 0), STONE)]);
+        assert!(body_wet(&w, feet));
+        let out = way_out(&w, feet).expect("a dry spot");
+        assert!(!body_wet(&w, out) && movement::geom::stand_clear(&w, out), "{out:?}");
+        assert!(out.distance_to(feet) <= 1.01, "the nearest: {out:?}");
+        // Feet in lava count too.
+        let (w, _keep) = world(&[(at(0, 10, 0), LAVA)]);
+        assert!(body_wet(&w, feet));
+    }
+
+    #[test]
+    fn clipped_down_into_water_under_a_floor_it_clips_back_up() {
+        // 10 Nov, FracAI007: water under a 2-block floor, every dry spot about past a block -
+        // the way out is back up through the floor it came down through.
+        let mut blocks = Vec::new();
+        for x in -2i32..=2 {
+            for z in -2i32..=2 {
+                blocks.push((at(x, 9, z), STONE));
+                for y in [12, 13] {
+                    blocks.push((at(x, y, z), STONE));
+                }
+                let wall = x.abs() == 2 || z.abs() == 2;
+                for y in [10, 11] {
+                    blocks.push((at(x, y, z), if wall { STONE } else { WATER }));
+                }
+            }
+        }
+        let (w, _keep) = world(&blocks);
+        let feet = Vec3::new(0.5, 10.1, 0.5);
+        assert!(body_wet(&w, feet));
+        assert_eq!(way_out(&w, feet), Some(Vec3::new(0.5, 14.0, 0.5)));
+        // And the mover finds that clip: the grid from 10.1 steps 13.85 (in the floor), 14.1 (past it).
+        assert_eq!(movement::geom::first_stand_above(&w, feet, 14.0), Some(14.0));
+    }
+
+    #[test]
+    fn dropped_fill_is_only_gone_after_through_dry_air() {
+        let mut blocks = vec![(at(0, 9, 0), STONE), (at(0, 10, 0), WATER)];
+        for x in -2..=2 {
+            for z in -2..=2 {
+                blocks.push((at(x, 12, z), STONE));
+            }
+        }
+        let (w, _keep) = world(&blocks);
+        assert!(!dry_lying(&w, Vec3::new(0.3, 10.2, 0.6), 15.0), "in water under the floor");
+        assert!(!dry_lying(&w, Vec3::new(1.4, 10.0, 0.5), 15.0), "dry, but under the floor");
+        assert!(dry_lying(&w, Vec3::new(1.4, 13.0, 0.5), 15.0), "on the floor, in the open");
+        assert!(dry_lying(&w, Vec3::new(1.4, 10.0, 0.5), 10.0), "under the floor with it");
+    }
+
+    #[test]
+    fn the_delayed_blocks_tool_is_held_for_its_last_ticks_only() {
+        // STARTed at tick 100, 40 ticks to break, answers back within 6.
+        let st = BotDig { delayed: Some((at(0, 60, 0), 500)), delayed_from: (100, 40), ..Default::default() };
+        assert_eq!(delayed_due(&st, 137, 6), None);
+        assert_eq!(delayed_due(&st, 138, 6), Some(at(0, 60, 0)));
+        assert_eq!(delayed_due(&st, 146, 6), Some(at(0, 60, 0)));
+        assert_eq!(delayed_due(&st, 147, 6), None, "late: only waited out");
+        assert_eq!(delayed_due(&BotDig::default(), 138, 6), None);
     }
 
     #[test]

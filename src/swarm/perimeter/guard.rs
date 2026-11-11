@@ -1,8 +1,8 @@
 //! Keeping a perimeter bot alive (5 Nov: a bot was shot dead by a pillager at the dig - 20 to 0
 //! health in 3 s - and its tools were lost where it died, far from its respawn).
 //! - **Auto-log**: hurt by anything but its own falls and clipping, down to LOG_HEALTH or LOG_BURST
-//!   lost within BURST_SECS: it logs out and stays out, as the panel's Stop does - the reason on
-//!   its row, in red in the feed, and on Discord.
+//!   lost within BURST_SECS, or drowning at all: it logs out and stays out, as the panel's Stop
+//!   does - the reason on its row, in red in the feed, and on Discord.
 //! - **The totem** is in the offhand from the start and is never moved (the user: "dont swap it"):
 //!   it is there in case the log-out is too slow. Fill is placed from the hotbar while it is.
 //! - **Armor** from the bags onto the empty armor slots.
@@ -32,6 +32,9 @@ const OWN_DOING: [&str; 3] = ["fall", "in_wall", "fly_into_wall"];
 pub const TOTEM: &str = "totem_of_undying";
 /// A second log-out this soon after one is the same one.
 const LOGGED_FOR_SECS: u64 = 60;
+/// Just joined, a drowning hurt is not yet a failed way out: logged out under water, it joins with
+/// no air left and drowns at once, before its chunks are in and it can clip up out of it.
+const JOIN_GRACE_SECS: f64 = 15.0;
 
 /// The player menu's armor slots and what goes in each.
 const ARMOR: [(usize, &str); 4] = [(5, "_helmet"), (6, "_chestplate"), (7, "_leggings"), (8, "_boots")];
@@ -48,13 +51,19 @@ fn causes(hurts: &[&Hurt]) -> String {
     if c.is_empty() { "something unknown".into() } else { c.join(", ") }
 }
 
-/// Why it should log out now, if it should.
-pub fn log_out_why(hurts: &[Hurt], health: f32, now: Instant) -> Option<String> {
+/// Why it should log out now, if it should. `joined`: when it last joined.
+pub fn log_out_why(hurts: &[Hurt], health: f32, now: Instant, joined: Option<Instant>) -> Option<String> {
     let since = |h: &Hurt| now.saturating_duration_since(h.at).as_secs_f64();
     let burst: Vec<&Hurt> = hurts.iter().filter(|h| from_outside(h) && since(h) <= BURST_SECS).collect();
     let lost: f32 = burst.iter().map(|h| h.lost).sum();
     if lost >= LOG_BURST {
         return Some(format!("lost {lost:.0} health in {BURST_SECS:.0} s to {} - {health:.0} left", causes(&burst)));
+    }
+    // Drowning is never sat through: the air is gone, so getting out of the water has failed
+    // (10 Nov: FracAI007, stuck under a floor, lost 8 health to it before the rule below).
+    let settled = joined.is_none_or(|j| now.saturating_duration_since(j).as_secs_f64() >= JOIN_GRACE_SECS);
+    if settled && hurts.iter().any(|h| since(h) <= BURST_SECS && h.from.iter().any(|f| f == "drown")) {
+        return Some(format!("drowning - stuck under water, {health:.0} health left"));
     }
     let recent: Vec<&Hurt> = hurts.iter().filter(|h| from_outside(h) && since(h) <= LOW_SECS).collect();
     if health <= LOG_HEALTH && !recent.is_empty() {
@@ -82,7 +91,7 @@ pub fn tick(bot: &Client, s: &Shared, ctx: &SwarmCtx, link: &BotLink, ticks: u64
         }
     }
     let hurts = s.hurts.lock().clone();
-    if let Some(why) = log_out_why(&hurts, health, Instant::now()) {
+    if let Some(why) = log_out_why(&hurts, health, Instant::now(), joined) {
         log_out(bot, s, ctx, link, &why);
         return true;
     }
@@ -169,7 +178,7 @@ mod tests {
         // 14:46:49 - 20 -> 14 from an arrow (then 8.6, 3.1, dead within 3 s).
         let now = Instant::now();
         let hurts = vec![hurt(0.0, 6.0, "arrow", now)];
-        let why = log_out_why(&hurts, 14.0, now).expect("logs out");
+        let why = log_out_why(&hurts, 14.0, now, None).expect("logs out");
         assert!(why.contains("arrow"), "{why}");
     }
 
@@ -177,14 +186,28 @@ mod tests {
     fn its_own_clipping_and_falls_never_log_it_out() {
         let now = Instant::now();
         let hurts = vec![hurt(1.0, 4.0, "fall", now), hurt(0.5, 3.0, "fall", now), hurt(0.0, 2.0, "in_wall", now)];
-        assert_eq!(log_out_why(&hurts, 11.0, now), None);
+        assert_eq!(log_out_why(&hurts, 11.0, now, None), None);
     }
 
     #[test]
     fn low_health_after_a_small_hit_logs_out_an_old_hit_does_not() {
         let now = Instant::now();
-        assert!(log_out_why(&[hurt(2.0, 2.0, "mob_attack", now)], 12.0, now).is_some());
-        assert_eq!(log_out_why(&[hurt(20.0, 2.0, "mob_attack", now)], 12.0, now), None, "20 s ago, healing since");
-        assert_eq!(log_out_why(&[hurt(1.0, 2.0, "mob_attack", now)], 18.0, now), None, "a scratch at full health");
+        assert!(log_out_why(&[hurt(2.0, 2.0, "mob_attack", now)], 12.0, now, None).is_some());
+        assert_eq!(log_out_why(&[hurt(20.0, 2.0, "mob_attack", now)], 12.0, now, None), None, "20 s ago, healing since");
+        assert_eq!(log_out_why(&[hurt(1.0, 2.0, "mob_attack", now)], 18.0, now, None), None, "a scratch at full health");
+    }
+
+    #[test]
+    fn the_first_drowning_hurt_logs_it_out() {
+        // 10 Nov, FracAI007: 1 at a time, 20 -> 12 in 36 s, before the low-health rule took it.
+        let now = Instant::now();
+        let why = log_out_why(&[hurt(0.0, 1.0, "drown", now)], 19.0, now, None).expect("logs out");
+        assert!(why.contains("drowning"), "{why}");
+        assert_eq!(log_out_why(&[hurt(30.0, 1.0, "drown", now)], 19.0, now, None), None, "long since, out of the water");
+        // Joined a moment ago under water: it gets to clip up first - the low-health rule still holds.
+        let joined = Some(now - Duration::from_secs(2));
+        assert_eq!(log_out_why(&[hurt(0.0, 1.0, "drown", now)], 19.0, now, joined), None);
+        assert!(log_out_why(&[hurt(0.0, 1.0, "drown", now)], 12.0, now, joined).is_some());
+        assert!(log_out_why(&[hurt(0.0, 1.0, "drown", now)], 19.0, now, Some(now - Duration::from_secs(30))).is_some());
     }
 }
